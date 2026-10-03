@@ -20,6 +20,8 @@ namespace Golem
         public float[] pivot;        // glTF scene frame (right-handed, +Y up, front +Z)
         public float[] axis;         // glTF scene frame; positive rotation opens the part
         public float[] limits_deg;   // [lower, upper]
+        public float rest_deg;       // pose as generated (0 for a closed lid; an open screen rests between its limits)
+        public float[] outward;      // glTF frame; positive rotation moves the part toward this side
         public string hinge_side;
     }
 }

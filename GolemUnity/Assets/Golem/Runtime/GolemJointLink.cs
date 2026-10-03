@@ -8,6 +8,9 @@ namespace Golem
     /// </summary>
     public class GolemJointLink : MonoBehaviour
     {
+        [Tooltip("World direction toward the hinge side: positive joint rotation moves the part this way.")]
+        public Vector3 outward;
+
         void Awake() => Apply(transform);
 
         /// <summary>Also called by the editor self-test, where Awake doesn't run.</summary>

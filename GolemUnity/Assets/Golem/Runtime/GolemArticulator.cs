@@ -64,11 +64,14 @@ namespace Golem
                 drive.stiffness = 400f;
                 drive.damping = 40f;
                 drive.forceLimit = float.MaxValue;
-                drive.target = joint.limits_deg[0];
+                // Start as generated: closed for a lid, standing open for a laptop screen.
+                drive.target = Mathf.Clamp(joint.rest_deg, joint.limits_deg[0], joint.limits_deg[1]);
                 childBody.xDrive = drive;
 
-                if (child.GetComponent<GolemJointLink>() == null)
-                    child.gameObject.AddComponent<GolemJointLink>();
+                var link = child.TryGetComponent(out GolemJointLink existing) ? existing : child.gameObject.AddComponent<GolemJointLink>();
+                link.outward = joint.outward != null && joint.outward.Length == 3
+                    ? root.TransformDirection(GltfDirection(joint.outward)).normalized
+                    : Vector3.zero;
             }
         }
 

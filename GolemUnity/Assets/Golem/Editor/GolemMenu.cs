@@ -38,6 +38,16 @@ namespace Golem.EditorTools
             EditorUtility.DisplayDialog("GOLEM", passed ? "All joints open the right way." : "A joint failed: see the Console.", "OK");
         }
 
+        /// <summary>For an agent driving the live Editor: import, self-test and save the open scene,
+        /// with no dialogs and without quitting Unity.</summary>
+        public static string ImportAndTest()
+        {
+            var count = ImportAll();
+            var passed = count > 0 && SelfTest();
+            EditorSceneManager.SaveScene(SceneManager.GetActiveScene());
+            return $"{count} prop(s), self-test {(passed ? "PASS" : "FAIL")}";
+        }
+
         public static void BuildFromCommandLine()
         {
             EditorSceneManager.OpenScene(ScenePath);
@@ -136,9 +146,11 @@ namespace Golem.EditorTools
         }
 
         /// <summary>
-        /// Simulates each prop headlessly: drive every joint to 70 degrees (or its limit) and check
-        /// that the moving part rises, i.e. the hinge axis has the right sign after the glTF -> Unity
-        /// conversion. Runs on copies, so the scene keeps its closed pose.
+        /// Simulates each prop headlessly: drive every joint 70 degrees (toward whichever limit has
+        /// room: open for a lid, closed for a standing laptop screen) and check that it turned that
+        /// far and moved the right way: positive rotation must move the part toward its hinge side
+        /// (a lid opening swings back over its hinge; a screen closing tips forward). That catches a
+        /// wrong axis sign after the glTF -> Unity conversion. Runs on copies, so the scene keeps its pose.
         /// </summary>
         public static bool SelfTest()
         {
@@ -153,11 +165,14 @@ namespace Golem.EditorTools
                 foreach (var link in copy.GetComponentsInChildren<GolemJointLink>())
                     GolemJointLink.Apply(link.transform);
                 var before = parts.Select(p => (p.transform.rotation, Center(p))).ToArray();
-                foreach (var part in parts)
+                var moves = new float[parts.Length];
+                for (var i = 0; i < parts.Length; i++)
                 {
-                    var drive = part.xDrive;
-                    drive.target = Mathf.Min(70f, drive.upperLimit);
-                    part.xDrive = drive;
+                    var drive = parts[i].xDrive;
+                    var upRoom = drive.upperLimit - drive.target;
+                    moves[i] = upRoom >= 45f ? Mathf.Min(70f, upRoom) : -Mathf.Min(70f, drive.target - drive.lowerLimit);
+                    drive.target += moves[i];
+                    parts[i].xDrive = drive;
                 }
                 for (var step = 0; step < 200; step++)
                     Physics.Simulate(0.02f);
@@ -165,11 +180,15 @@ namespace Golem.EditorTools
                 for (var i = 0; i < parts.Length; i++)
                 {
                     var angle = Quaternion.Angle(before[i].rotation, parts[i].transform.rotation);
-                    var rise = Center(parts[i]).y - before[i].Item2.y;
-                    var ok = rise > 0 && angle > 45f;
+                    var shift = Center(parts[i]) - before[i].Item2;
+                    var outward = parts[i].TryGetComponent(out GolemJointLink link) ? link.outward : Vector3.zero;
+                    // Positive rotation moves the part toward its hinge side; without that data, a lid must rise.
+                    var rightWay = outward != Vector3.zero ? Mathf.Sign(Vector3.Dot(shift, outward)) == Mathf.Sign(moves[i]) : shift.y > 0;
+                    var ok = rightWay && Mathf.Abs(angle - Mathf.Abs(moves[i])) < 10f;
                     passed &= ok;
                     tested++;
-                    Debug.Log($"[GOLEM] SELFTEST {original.name}/{parts[i].name}: turned {angle:F1} deg, rose {rise:F3} -> {(ok ? "PASS" : "FAIL")}");
+                    Debug.Log($"[GOLEM] SELFTEST {original.name}/{parts[i].name}: drove {moves[i]:+0;-0} deg, turned {angle:F1}, " +
+                              $"moved {(rightWay ? "the right way" : "THE WRONG WAY")} -> {(ok ? "PASS" : "FAIL")}");
                 }
                 Object.DestroyImmediate(copy);
             }
