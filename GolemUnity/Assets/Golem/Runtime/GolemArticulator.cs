@@ -107,17 +107,43 @@ namespace Golem
             return part.TryGetComponent(out ArticulationBody body) ? body : part.gameObject.AddComponent<ArticulationBody>();
         }
 
-        /// <summary>density x volume, with the volume taken as half the part's world bounding box
-        /// (generated parts are solid shells; a box overestimates, the fill factor compensates).</summary>
-        static float EstimateMass(Transform part, System.Collections.Generic.HashSet<string> partNames, float density)
+        /// <summary>density x the part's enclosed mesh volume (world scale). The cut parts are capped,
+        /// so the volume is real; if a mesh is too open to trust (volume implausibly small or larger
+        /// than its bounding box), fall back to half the bounding box.</summary>
+        public static float EstimateMass(Transform part, System.Collections.Generic.HashSet<string> partNames, float density)
         {
-            var renderers = OwnMeshes(part, partNames).Select(f => f.GetComponent<Renderer>()).Where(r => r != null).ToArray();
+            var filters = OwnMeshes(part, partNames).ToArray();
+            var renderers = filters.Select(f => f.GetComponent<Renderer>()).Where(r => r != null).ToArray();
             if (renderers.Length == 0)
                 return 1f;
             var b = renderers[0].bounds;
             foreach (var r in renderers)
                 b.Encapsulate(r.bounds);
-            return Mathf.Max(0.1f, 0.5f * b.size.x * b.size.y * b.size.z * density);
+            var boxVolume = b.size.x * b.size.y * b.size.z;
+            var volume = filters.Sum(MeshVolume);
+            if (!(volume > 0.02f * boxVolume && volume < boxVolume))
+                volume = 0.5f * boxVolume;
+            return Mathf.Max(0.1f, volume * density);
+        }
+
+        /// <summary>Enclosed volume of a mesh in world units: the sum of signed tetrahedra from the origin.</summary>
+        static float MeshVolume(MeshFilter filter)
+        {
+            var mesh = filter.sharedMesh;
+            if (mesh == null || !mesh.isReadable)
+                return 0f;
+            var toWorld = filter.transform.localToWorldMatrix;
+            var vertices = mesh.vertices;
+            var triangles = mesh.triangles;
+            double volume = 0;
+            for (var i = 0; i < triangles.Length; i += 3)
+            {
+                var a = toWorld.MultiplyPoint3x4(vertices[triangles[i]]);
+                var c = toWorld.MultiplyPoint3x4(vertices[triangles[i + 1]]);
+                var d = toWorld.MultiplyPoint3x4(vertices[triangles[i + 2]]);
+                volume += Vector3.Dot(a, Vector3.Cross(c, d)) / 6.0;
+            }
+            return Mathf.Abs((float)volume);
         }
 
         static System.Collections.Generic.IEnumerable<MeshFilter> OwnMeshes(Transform node, System.Collections.Generic.HashSet<string> partNames)

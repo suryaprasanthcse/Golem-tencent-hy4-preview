@@ -63,6 +63,9 @@ namespace Golem.EditorTools
             return $"{count} prop(s), self-test {(passed ? "PASS" : "FAIL")}";
         }
 
+        /// <summary>For an agent: import every prop, self-test, then build the demo stage.</summary>
+        public static string RebuildAll() => ImportAndTest() + "; " + GolemStage.Build();
+
         public static void BuildFromCommandLine()
         {
             EditorSceneManager.OpenScene(ScenePath);
@@ -97,12 +100,23 @@ namespace Golem.EditorTools
 
         static bool ImportProp(string name, string glb, string json, Vector3 position)
         {
+            // Remove the previous instance BEFORE reimporting: reimporting swaps the meshes under its
+            // MeshColliders, and PhysX crashes the Editor detaching them from articulation links.
+            var old = GameObject.Find(name + Suffix);
+            if (old != null)
+                Object.DestroyImmediate(old);
+
             var folder = $"{PropsFolder}/{name}";
             Directory.CreateDirectory(folder);
             var glbAsset = $"{folder}/{name}_split.glb";
-            File.Copy(glb, glbAsset, true);
             File.Copy(json, $"{folder}/{name}_joints.json", true);
-            AssetDatabase.ImportAsset(glbAsset, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            // Only reimport a model that actually changed: faster, and nothing else in the scene can
+            // be holding meshes that are about to be replaced.
+            if (!File.Exists(glbAsset) || !File.ReadAllBytes(glbAsset).SequenceEqual(File.ReadAllBytes(glb)))
+            {
+                File.Copy(glb, glbAsset, true);
+                AssetDatabase.ImportAsset(glbAsset, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            }
 
             var model = AssetDatabase.LoadAssetAtPath<GameObject>(glbAsset);
             if (model == null)
@@ -110,9 +124,6 @@ namespace Golem.EditorTools
                 Debug.LogError($"[GOLEM] {name}: glTFast did not import {glbAsset} (is com.unity.cloud.gltfast installed?)");
                 return false;
             }
-            var old = GameObject.Find(name + Suffix);
-            if (old != null)
-                Object.DestroyImmediate(old);
 
             // The wrapper stands in for the glTF scene root, so the spec's coordinates mean the same
             // thing here. (glTFast folds a glTF's single root node into the imported object and
@@ -185,6 +196,8 @@ namespace Golem.EditorTools
             foreach (var original in Object.FindObjectsByType<Transform>(FindObjectsSortMode.None).Where(t => t.parent == null && t.name.EndsWith(Suffix)))
             {
                 var copy = Object.Instantiate(original.gameObject, original.position + new Vector3(0, 0, -50), original.rotation);
+                foreach (var root in copy.GetComponentsInChildren<ArticulationBody>().Where(b => b.isRoot))
+                    root.immovable = true;  // the copy floats away from the floor; pin it while testing joints
                 var parts = copy.GetComponentsInChildren<ArticulationBody>().Where(b => !b.isRoot).ToArray();
                 foreach (var link in copy.GetComponentsInChildren<GolemJointLink>())
                     GolemJointLink.Apply(link.transform);
