@@ -12,7 +12,16 @@ assets/raw/
 assets/split/
 assets/tmp/
 
-# Unity
+# Generated renders
+assets/preview/
+
+# Unity: GOLEM > Import Split Props copies the split models in; regenerate rather than commit
+GolemUnity/Assets/GolemProps/
+GolemUnity/Assets/GolemProps.meta
+*.csproj
+*.sln
+.vs/
+.idea/
 [Ll]ibrary/
 [Tt]emp/
 [Oo]bj/

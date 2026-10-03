@@ -1,0 +1,119 @@
+using System.Linq;
+using UnityEngine;
+
+namespace Golem
+{
+    /// <summary>
+    /// Turns an imported glTF prop plus its joint spec into an ArticulationBody chain.
+    ///
+    /// glTFast converts glTF (right-handed) to Unity (left-handed) by mirroring X: M = diag(-1, 1, 1).
+    /// Points and slide directions map with M. Rotation axes are pseudo-vectors and map with
+    /// -M (that is, (x, -y, -z)) so that the same angle opens the part the same way; mirroring a
+    /// hinge axis like a position would make every joint open backwards.
+    /// </summary>
+    public static class GolemArticulator
+    {
+        public static Vector3 GltfPoint(float[] p) => new Vector3(-p[0], p[1], p[2]);
+        public static Vector3 GltfDirection(float[] d) => new Vector3(-d[0], d[1], d[2]);
+        public static Vector3 GltfRotationAxis(float[] a) => new Vector3(a[0], -a[1], -a[2]);
+
+        /// <param name="root">The instantiated glTF scene root; the spec's frame is its local frame.</param>
+        public static void Build(Transform root, GolemSpec spec)
+        {
+            var partNames = spec.joints.SelectMany(j => new[] { j.parent, j.child }).ToHashSet();
+            var childNames = spec.joints.Select(j => j.child).ToHashSet();
+            foreach (var joint in spec.joints)
+            {
+                // A root part (never a child) may have been renamed by glTFast to the file name:
+                // it is then the imported model's top object, the root's first child.
+                var parent = FindDeep(root, joint.parent)
+                    ?? (!childNames.Contains(joint.parent) && root.childCount > 0 ? root.GetChild(0) : null);
+                var child = FindDeep(root, joint.child);
+                if (parent == null || child == null)
+                {
+                    var names = string.Join(", ", root.GetComponentsInChildren<Transform>(true).Select(t => t.name));
+                    Debug.LogError($"[GOLEM] {spec.asset}: node '{joint.parent}' or '{joint.child}' not found among: {names}");
+                    continue;
+                }
+
+                var parentBody = EnsureBody(parent, partNames);
+                if (parentBody.isRoot)
+                    parentBody.immovable = true;  // the body stays put; its parts move
+                var childBody = EnsureBody(child, partNames);
+                childBody.mass = 1f;
+
+                var pivotWorld = root.TransformPoint(GltfPoint(joint.pivot));
+                if (joint.type == "prismatic")
+                {
+                    childBody.jointType = ArticulationJointType.PrismaticJoint;
+                    childBody.linearLockX = ArticulationDofLock.LimitedMotion;
+                    childBody.linearLockY = ArticulationDofLock.LockedMotion;
+                    childBody.linearLockZ = ArticulationDofLock.LockedMotion;
+                    AlignAnchor(childBody, child, pivotWorld, root.TransformDirection(GltfDirection(joint.axis)));
+                }
+                else
+                {
+                    childBody.jointType = ArticulationJointType.RevoluteJoint;
+                    childBody.twistLock = ArticulationDofLock.LimitedMotion;
+                    AlignAnchor(childBody, child, pivotWorld, root.TransformDirection(GltfRotationAxis(joint.axis)));
+                }
+
+                var drive = childBody.xDrive;
+                drive.lowerLimit = joint.limits_deg[0];
+                drive.upperLimit = joint.limits_deg[1];
+                drive.stiffness = 400f;
+                drive.damping = 40f;
+                drive.forceLimit = float.MaxValue;
+                drive.target = joint.limits_deg[0];
+                childBody.xDrive = drive;
+
+                if (child.GetComponent<GolemJointLink>() == null)
+                    child.gameObject.AddComponent<GolemJointLink>();
+            }
+        }
+
+        /// <summary>Anchor on the pivot, with the anchor's X axis (the joint axis in Unity) along the joint.</summary>
+        static void AlignAnchor(ArticulationBody body, Transform part, Vector3 pivotWorld, Vector3 axisWorld)
+        {
+            body.matchAnchors = true;
+            body.anchorPosition = part.InverseTransformPoint(pivotWorld);
+            body.anchorRotation = Quaternion.FromToRotation(Vector3.right, part.InverseTransformDirection(axisWorld).normalized);
+        }
+
+        /// <summary>An ArticulationBody on the part, with convex colliders for its meshes. glTFast may put
+        /// a mesh on the node itself or on child objects, so meshes are collected from the part's
+        /// own subtree, stopping at other parts (a hinged lid has its own colliders).</summary>
+        static ArticulationBody EnsureBody(Transform part, System.Collections.Generic.HashSet<string> partNames)
+        {
+            if (!part.TryGetComponent(out MeshCollider _))
+            {
+                foreach (var filter in OwnMeshes(part, partNames))
+                {
+                    var collider = filter.gameObject.AddComponent<MeshCollider>();
+                    collider.sharedMesh = filter.sharedMesh;
+                    collider.convex = true;  // moving bodies need convex colliders
+                }
+            }
+            // TryGetComponent, not "??": the Editor's fake-null objects would fool the ?? operator.
+            return part.TryGetComponent(out ArticulationBody body) ? body : part.gameObject.AddComponent<ArticulationBody>();
+        }
+
+        static System.Collections.Generic.IEnumerable<MeshFilter> OwnMeshes(Transform node, System.Collections.Generic.HashSet<string> partNames)
+        {
+            foreach (var filter in node.GetComponents<MeshFilter>())
+                if (filter.sharedMesh != null)
+                    yield return filter;
+            foreach (Transform child in node)
+                if (!partNames.Contains(child.name))
+                    foreach (var filter in OwnMeshes(child, partNames))
+                        yield return filter;
+        }
+
+        public static Transform FindDeep(Transform root, string name)
+        {
+            if (root.name == name)
+                return root;
+            return root.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == name);
+        }
+    }
+}
