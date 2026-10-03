@@ -65,6 +65,10 @@ def run_in_blender(args) -> None:
                 sys.exit(f"[golem] no node '{joint['child']}' in {args.input.name}")
             x, y, z = joint["axis"]
             axis = Vector((x, -z, y))  # glTF (x, y, z) -> Blender (x, -z, y)
+            if joint["type"] == "prismatic":  # slides pull out to their full travel
+                part.location += axis * joint["limits_deg"][1]
+                log(f"{joint['child']} slid {joint['limits_deg'][1]:.3f} along {list(axis)}")
+                continue
             part.rotation_mode = "QUATERNION"
             part.rotation_quaternion = Quaternion(axis, math.radians(args.open_deg)) @ part.rotation_quaternion
             log(f"{joint['child']} opened {args.open_deg} deg about {list(axis)}")

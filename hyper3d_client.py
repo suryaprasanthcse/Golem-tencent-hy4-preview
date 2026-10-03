@@ -155,10 +155,21 @@ def bang(source: str, instruction, strength, name) -> dict:
 
 def wait(job: dict, timeout_minutes: float) -> None:
     """Check status (5 s, backing off to 30 s) until done; exit on failure or timeout."""
-    start, interval, last = time.monotonic(), POLL_FIRST, None
+    start, interval, last, failures = time.monotonic(), POLL_FIRST, None, 0
     while True:
         time.sleep(interval)
-        response = run("status", job["generation_id"])
+        try:
+            response = run("status", job["generation_id"])
+            failures = 0
+        except SystemExit as error:
+            # A status check timing out says nothing about the job, which keeps running
+            # server-side; only give up after several failures in a row.
+            failures += 1
+            if failures >= 5:
+                raise
+            print(f"[status] check failed ({failures}/5), retrying: {error}")
+            interval = min(interval * 1.5, POLL_MAX)
+            continue
         status = str(_find(response, ["status", "state"]) or "unknown")
         elapsed = time.monotonic() - start
         if status != last:

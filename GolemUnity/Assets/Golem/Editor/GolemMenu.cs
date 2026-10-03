@@ -164,13 +164,20 @@ namespace Golem.EditorTools
                 var parts = copy.GetComponentsInChildren<ArticulationBody>().Where(b => !b.isRoot).ToArray();
                 foreach (var link in copy.GetComponentsInChildren<GolemJointLink>())
                     GolemJointLink.Apply(link.transform);
-                var before = parts.Select(p => (p.transform.rotation, Center(p))).ToArray();
+                var before = parts.Select(p => (rotation: p.transform.rotation, center: Center(p),
+                    pivot: p.transform.TransformPoint(p.anchorPosition),
+                    axis: p.transform.rotation * p.anchorRotation * Vector3.right)).ToArray();
                 var moves = new float[parts.Length];
                 for (var i = 0; i < parts.Length; i++)
                 {
                     var drive = parts[i].xDrive;
+                    var slide = parts[i].jointType == ArticulationJointType.PrismaticJoint;
                     var upRoom = drive.upperLimit - drive.target;
-                    moves[i] = upRoom >= 45f ? Mathf.Min(70f, upRoom) : -Mathf.Min(70f, drive.target - drive.lowerLimit);
+                    var downRoom = drive.target - drive.lowerLimit;
+                    // Hinges move 70 degrees, slides 70% of their travel, toward whichever limit has room.
+                    moves[i] = slide
+                        ? (upRoom >= downRoom ? 0.7f * upRoom : -0.7f * downRoom)
+                        : (upRoom >= 45f ? Mathf.Min(70f, upRoom) : -Mathf.Min(70f, downRoom));
                     drive.target += moves[i];
                     parts[i].xDrive = drive;
                 }
@@ -179,16 +186,28 @@ namespace Golem.EditorTools
 
                 for (var i = 0; i < parts.Length; i++)
                 {
-                    var angle = Quaternion.Angle(before[i].rotation, parts[i].transform.rotation);
-                    var shift = Center(parts[i]) - before[i].Item2;
+                    var b = before[i];
+                    var slide = parts[i].jointType == ArticulationJointType.PrismaticJoint;
+                    var shift = Center(parts[i]) - b.center;
                     var outward = parts[i].TryGetComponent(out GolemJointLink link) ? link.outward : Vector3.zero;
-                    // Positive rotation moves the part toward its hinge side; without that data, a lid must rise.
+                    // Positive travel moves the part toward its hinge side (or slide direction); without that data, a lid must rise.
                     var rightWay = outward != Vector3.zero ? Mathf.Sign(Vector3.Dot(shift, outward)) == Mathf.Sign(moves[i]) : shift.y > 0;
-                    var ok = rightWay && Mathf.Abs(angle - Mathf.Abs(moves[i])) < 10f;
+                    // Where the drag controller assumes the part goes for this travel: along the anchor's X axis,
+                    // or around it by Quaternion.AngleAxis. If physics disagrees, dragging would feel inverted.
+                    var predicted = slide
+                        ? b.axis * moves[i]
+                        : b.pivot + Quaternion.AngleAxis(moves[i], b.axis) * (b.center - b.pivot) - b.center;
+                    var dragAgrees = Vector3.Angle(predicted, shift) < 30f;
+                    float amount = slide ? shift.magnitude : Quaternion.Angle(b.rotation, parts[i].transform.rotation);
+                    var reached = slide ? Mathf.Abs(amount - Mathf.Abs(moves[i])) < 0.25f * Mathf.Abs(moves[i])
+                                        : Mathf.Abs(amount - Mathf.Abs(moves[i])) < 10f;
+                    var ok = rightWay && dragAgrees && reached;
                     passed &= ok;
                     tested++;
-                    Debug.Log($"[GOLEM] SELFTEST {original.name}/{parts[i].name}: drove {moves[i]:+0;-0} deg, turned {angle:F1}, " +
-                              $"moved {(rightWay ? "the right way" : "THE WRONG WAY")} -> {(ok ? "PASS" : "FAIL")}");
+                    var unit = slide ? "" : " deg";
+                    Debug.Log($"[GOLEM] SELFTEST {original.name}/{parts[i].name}: {(slide ? "slid" : "turned")} {amount:F2}{unit} " +
+                              $"of {moves[i]:+0.00;-0.00}{unit}, {(rightWay ? "right way" : "WRONG WAY")}, " +
+                              $"drag {(dragAgrees ? "agrees" : "DISAGREES")} -> {(ok ? "PASS" : "FAIL")}");
                 }
                 Object.DestroyImmediate(copy);
             }

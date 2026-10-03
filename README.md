@@ -17,9 +17,20 @@ AI models only make discrete choices: what a part is, which part it hangs from, 
 | 1. Generate | Text prompt → Hyper3D Rodin Gen-2.5 through the official CLI (browser sign-in; `hyper3d_client.py`) → `.glb` |
 | 2. Split | The layered segmenter (below) separates moving parts from the body |
 | 3. Candidates | Oriented boxes per part → candidate hinge and slide axes |
-| 4. Choose | A model labels parts and joint types; geometry and a sweep test pick the hinge |
+| 4. Choose (Artist-in-the-Loop) | The artist picks which parts move, the hinge side and which way they open (or slide); geometry computes the exact pivot, axis and limits |
 | 5. Solve | Snap the hinge to the part/parent seam, rescale to real-world size, compute mass, colliders and limits |
 | 6. Unity | glTF parts with pivots plus a joint spec → `ArticulationBody` chain, with drag interaction |
+
+## Artist-in-the-Loop
+
+The artist makes the creative calls in a few words: "the door is these parts, hinged on the left, opening toward the front". GOLEM does the grunt work: pivots, axes, joint limits, colliders and physics. The artist stays in control of how a prop behaves, and never places a pivot by hand.
+
+```
+python golem_assemble.py assets/raw/vault_door_bang.glb --root root.5 --move "door=root.12,root.1,root.2:left:front:100"
+python golem_assemble.py assets/raw/filing_cabinet_bang.glb --root <body> --slide "drawer_top=<part>:front"
+python golem_cutter.py assets/raw/chest.glb                  # boxy lids: the seam is found automatically
+python golem_cutter.py assets/raw/laptop.glb --open-part     # parts generated already open
+```
 
 ## The layered segmenter
 

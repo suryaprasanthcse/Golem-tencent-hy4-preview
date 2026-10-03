@@ -8,13 +8,18 @@ the same files as golem_cutter.py, so the Unity side treats both tiers alike.
   python golem_assemble.py assets/raw/vault_door_bang.glb --root root.5 \
       --move door=root.12,root.1,root.2:left:front:100
 
---move NAME=NODES:HINGE:OPENS[:LIMIT] (repeatable)
+--move NAME=NODES:HINGE:OPENS[:LIMIT] (repeatable): a hinged part
   NODES   comma-separated node names that move together
   HINGE   side of the group the hinge is on: left, right, back, front, top, bottom
   OPENS   direction the free edge swings toward: front, back, up, down, left, right
   LIMIT   opening limit in degrees (default 100)
 The pivot sits on the group's box at its extreme toward HINGE and toward OPENS (so the part
 swings clear of what it closes against), centered along the hinge line.
+
+--slide NAME=NODES:DIRECTION[:TRAVEL] (repeatable): a sliding part, e.g. a drawer
+  DIRECTION  which way it pulls out: front, back, left, right, up, down
+  TRAVEL     how far, in scene units (default: half the fixed body's depth along DIRECTION,
+             since a drawer front is thin but the drawer runs back into the body)
 
 Writes assets/split/<name>/<name>_split.glb and <name>_joints.json. Runs in headless Blender.
 """
@@ -40,7 +45,8 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("input", type=Path)
     parser.add_argument("--root", required=True, help="comma-separated node names that stay fixed")
-    parser.add_argument("--move", action="append", required=True, help="NAME=NODES:HINGE:OPENS[:LIMIT]")
+    parser.add_argument("--move", action="append", default=[], help="NAME=NODES:HINGE:OPENS[:LIMIT]")
+    parser.add_argument("--slide", action="append", default=[], help="NAME=NODES:DIRECTION[:TRAVEL]")
     parser.add_argument("--name", help="output name (default: input file name)")
     parser.add_argument("--out", type=Path, default=ROOT / "assets" / "split")
     args = parser.parse_args(argv)
@@ -50,8 +56,17 @@ def parse_args(argv):
         fields = rest.split(":")
         if len(fields) not in (3, 4) or fields[1] not in SIDES or fields[2] not in SIDES:
             parser.error(f"bad --move {spec!r}; expected NAME=NODES:HINGE:OPENS[:LIMIT]")
-        groups.append({"name": name, "nodes": fields[0].split(","), "hinge": fields[1], "opens": fields[2],
-                       "limit": float(fields[3]) if len(fields) == 4 else 100.0})
+        groups.append({"kind": "hinge", "name": name, "nodes": fields[0].split(","), "hinge": fields[1],
+                       "opens": fields[2], "limit": float(fields[3]) if len(fields) == 4 else 100.0})
+    for spec in args.slide:
+        name, rest = spec.split("=", 1)
+        fields = rest.split(":")
+        if len(fields) not in (2, 3) or fields[1] not in SIDES:
+            parser.error(f"bad --slide {spec!r}; expected NAME=NODES:DIRECTION[:TRAVEL]")
+        groups.append({"kind": "slide", "name": name, "nodes": fields[0].split(","), "direction": fields[1],
+                       "travel": float(fields[2]) if len(fields) == 3 else None})
+    if not groups:
+        parser.error("give at least one --move or --slide")
     args.groups = groups
     return args
 
@@ -117,6 +132,7 @@ def run_in_blender(args) -> None:
 
     body = join(args.root.split(","), "body")
     co = vertices(body)
+    body_size = co.max(axis=0) - co.min(axis=0)
     base = np.array([(co[:, 0].min() + co[:, 0].max()) / 2, (co[:, 1].min() + co[:, 1].max()) / 2, co[:, 2].min()])
     set_origin(body, base)
     bpy.context.view_layer.update()
@@ -125,6 +141,27 @@ def run_in_blender(args) -> None:
     for group in args.groups:
         part = join(group["nodes"], group["name"])
         co = vertices(part)
+        if group["kind"] == "slide":
+            direction = np.array(SIDES[group["direction"]], float)
+            lo, hi = co.min(axis=0), co.max(axis=0)
+            travel = group["travel"] if group["travel"] is not None else 0.5 * float(body_size @ np.abs(direction))
+            set_origin(part, (lo + hi) / 2)  # a slide has no pivot; anchor it at its middle
+            bpy.context.view_layer.update()
+            part.parent = body
+            part.matrix_parent_inverse = body.matrix_world.inverted()
+            joints.append({
+                "type": "prismatic",
+                "parent": "body",
+                "child": group["name"],
+                "pivot": to_gltf((lo + hi) / 2),
+                "axis": to_gltf(direction),
+                "limits_deg": [0.0, round(travel, 6)],  # a slide's limits are in scene units, not degrees
+                "rest_deg": 0.0,
+                "slides_toward": group["direction"],
+                "outward": to_gltf(direction),  # positive travel moves the part this way
+            })
+            log(f"{group['name']}: nodes {group['nodes']}, slides {group['direction']} up to {travel:.3f}")
+            continue
         hinge, opens = np.array(SIDES[group["hinge"]], float), np.array(SIDES[group["opens"]], float)
         if abs(hinge @ opens) > 0.5:
             sys.exit(f"[golem] {group['name']}: hinge side and opening direction must be perpendicular")
