@@ -56,15 +56,18 @@ def run_in_blender(args) -> None:
     meshes = [o for o in scene.objects if o.type == "MESH"]
 
     if args.open_deg:
-        joints = args.input.with_name(args.input.name.replace("_split.glb", "_joints.json"))
-        lid = next((o for o in scene.objects if o.name.startswith("lid")), None)
-        if lid is None or not joints.exists():
-            sys.exit("[golem] --open-deg needs a 'lid' node and its *_joints.json next to the .glb")
-        x, y, z = json.loads(joints.read_text())["joints"][0]["axis"]
-        axis = Vector((x, -z, y))  # glTF (x, y, z) -> Blender (x, -z, y)
-        lid.rotation_mode = "QUATERNION"
-        lid.rotation_quaternion = Quaternion(axis, math.radians(args.open_deg)) @ lid.rotation_quaternion
-        log(f"lid opened {args.open_deg} deg about {list(axis)}")
+        joints_path = args.input.with_name(args.input.name.replace("_split.glb", "_joints.json"))
+        if not joints_path.exists():
+            sys.exit(f"[golem] --open-deg needs {joints_path.name} next to the .glb")
+        for joint in json.loads(joints_path.read_text())["joints"]:
+            part = next((o for o in scene.objects if o.name.startswith(joint["child"])), None)
+            if part is None:
+                sys.exit(f"[golem] no node '{joint['child']}' in {args.input.name}")
+            x, y, z = joint["axis"]
+            axis = Vector((x, -z, y))  # glTF (x, y, z) -> Blender (x, -z, y)
+            part.rotation_mode = "QUATERNION"
+            part.rotation_quaternion = Quaternion(axis, math.radians(args.open_deg)) @ part.rotation_quaternion
+            log(f"{joint['child']} opened {args.open_deg} deg about {list(axis)}")
     bpy.context.view_layer.update()
 
     corners = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
@@ -95,7 +98,7 @@ def run_in_blender(args) -> None:
     scene.collection.objects.link(camera)
     scene.camera = camera
 
-    out_dir = args.out / args.input.stem.replace("_split", "")
+    out_dir = (args.out / args.input.stem.replace("_split", "")).resolve()  # Blender misreads relative render paths
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_open{int(args.open_deg)}" if args.open_deg else ""
     # glTF's front (+Z) imports as Blender -Y; Blender cameras look along their local -Z.

@@ -41,6 +41,12 @@ def parse_args(argv):
     parser.add_argument("--band", type=float, nargs=2, default=(0.45, 0.92), help="height range searched for a seam")
     parser.add_argument("--hinge", choices=sorted(HINGE_SIDES), default="back")
     parser.add_argument("--open-deg", type=float, default=110.0, help="opening limit in degrees")
+    parser.add_argument(
+        "--open-part",
+        action="store_true",
+        help="the part above the cut is already open (e.g. a laptop screen): cut where the section "
+        "area drops sharply, and let the joint close it as well as open it wider",
+    )
     parser.add_argument("--out", type=Path, default=ROOT / "assets" / "split")
     return parser.parse_args(argv)
 
@@ -107,6 +113,10 @@ def seam_candidates(tri, z0, z1, band, samples=120):
     valid = np.where(np.isnan(areas), np.nanmedian(areas), areas)
     smooth = np.convolve(np.pad(valid, 1, mode="edge"), np.ones(3) / 3, mode="valid")
     window, candidates = max(2, samples // 12), []
+    # A lid seam has real geometry on both sides. The legs of a carrying handle also dip,
+    # but above them there is only a thin bar: require both sides to be at least half the
+    # typical section.
+    substantial = 0.5 * float(np.median(valid))
     for i in range(1, samples - 1):
         # A groove: a local dip in the section area.
         if smooth[i] <= smooth[i - 1] and smooth[i] <= smooth[i + 1]:
@@ -114,7 +124,7 @@ def seam_candidates(tri, z0, z1, band, samples=120):
             left, right = smooth[max(0, i - window) : i].max(), smooth[i + 1 : i + window + 1].max()
             rim = min(left, right)
             depth = 1 - smooth[i] / rim if rim > 0 else 0
-            if depth >= 0.03:
+            if depth >= 0.03 and rim >= substantial:
                 # A groove has a flat bottom: cut at the middle of it, not at its first sample.
                 lo = hi = i
                 while lo > 0 and smooth[lo - 1] <= smooth[i] * 1.005:
@@ -127,7 +137,8 @@ def seam_candidates(tri, z0, z1, band, samples=120):
         if 2 <= i < samples - 2 and smooth[i - 2] > 0 and smooth[i + 2] > 0:
             step = abs(np.log(smooth[i + 2] / smooth[i - 2]))
             neighbours = [abs(np.log(smooth[j + 2] / smooth[j - 2])) for j in (i - 1, i + 1) if 2 <= j < samples - 2]
-            if step >= np.log(1.05) and all(step >= s for s in neighbours):
+            both_sides = min(smooth[i - 2], smooth[i + 2]) >= substantial
+            if step >= np.log(1.05) and both_sides and all(step >= s for s in neighbours):
                 candidates.append({"kind": "lip", "fraction": float(np.interp(heights[i], [z0, z1], [0, 1])), "score": float(step)})
 
     # Grooves rank first: they are the clearest seam signal, and the steps at a groove's
@@ -194,7 +205,21 @@ def run_in_blender(args) -> None:
     log(f"input {args.input.name}: {len(mesh.vertices)} vertices ({welded} welded), {len(mesh.polygons)} faces, height {z1 - z0:.4f}")
 
     candidates, profile = seam_candidates(tri, z0, z1, args.band)
-    if args.cut == "auto":
+    if args.cut == "auto" and args.open_part:
+        # Above a laptop's deck only the thin standing screen remains. The section first drops
+        # below a fifth of the deck's, then keeps shrinking through the tapering keycaps, then
+        # levels off at the screen alone: cut where it levels off, so no keycaps go with it.
+        fractions = np.linspace(0.02, 0.6, 117)
+        areas = np.array([section_area(tri, z0 + f * (z1 - z0)) for f in fractions])
+        deck = np.nanmedian(areas[:15])
+        small = np.flatnonzero(areas < 0.2 * deck)
+        if len(small) == 0:
+            sys.exit("[golem] --open-part: no sharp drop in section area between 2% and 60% of the height")
+        i = small[0]
+        while i + 1 < len(areas) and areas[i + 1] < 0.97 * areas[i]:
+            i += 1
+        fraction, method = float(fractions[i]), "auto: open part, where the section levels off above the base"
+    elif args.cut == "auto":
         if candidates:
             fraction, method = candidates[0]["fraction"], f"auto: {candidates[0]['kind']} (score {candidates[0]['score']:.3f})"
         else:
@@ -249,6 +274,21 @@ def run_in_blender(args) -> None:
     pivot[2] = cut_z
     axis = np.cross([0.0, 0.0, 1.0], out_dir)  # positive rotation lifts the lid's far side
 
+    limits, rest, open_angle = [0.0, args.open_deg], 0.0, None
+    if args.open_part:
+        # How far the part already stands open: the main direction of its cross-section
+        # (across the hinge), measured up from "lying flat toward the front".
+        part = np.array([v.co[:] for v in lid_mesh.vertices]) - pivot
+        across = np.stack([part @ out_dir, part[:, 2]], axis=1)
+        across -= across.mean(axis=0)
+        direction = np.linalg.svd(across, full_matrices=False)[2][0]
+        if direction[1] < 0:
+            direction = -direction
+        open_angle = float(np.degrees(np.arctan2(direction[1], -direction[0])))
+        # Rest as generated (0); close down to almost flat, or open up to 135 degrees in total.
+        limits = [-(open_angle - 2.0), max(0.0, 135.0 - open_angle)]
+        log(f"open part stands at {open_angle:.1f} deg; joint limits {limits[0]:.1f} to {limits[1]:.1f}")
+
     base = np.array([(co[:, 0].min() + co[:, 0].max()) / 2, (co[:, 1].min() + co[:, 1].max()) / 2, z0])
     body_mesh.transform(Matrix.Translation(Vector(-base)))
     lid_mesh.transform(Matrix.Translation(Vector(-pivot)))
@@ -272,8 +312,11 @@ def run_in_blender(args) -> None:
         "child": "lid",
         "pivot": to_gltf(pivot),
         "axis": to_gltf(axis),
-        "limits_deg": [0.0, args.open_deg],
+        "limits_deg": [round(limits[0], 2), round(limits[1], 2)],
+        "rest_deg": rest,
         "hinge_side": args.hinge,
+        "outward": to_gltf(out_dir),  # positive rotation moves the part toward this side
+        "open_angle_deg": None if open_angle is None else round(open_angle, 2),
         "hinge_length": round(float(spread.max() - spread.min()), 6),
     }
     lid["golem_joint"] = json.dumps(joint)  # also travels in the glTF node's extras
