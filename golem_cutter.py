@@ -9,10 +9,10 @@ sits on the hinge, so Unity rotates it about the right line) and <name>_joints.j
 (the joint in glTF coordinates).
 
 How the cut height is chosen (--cut auto, the default): slice the mesh at many
-heights, measure each cross-section's footprint, and look for a groove (a dip in
-the footprint) or a lip (a sudden step). The strongest one wins; if none is clear,
-cut at --fallback of the height. All candidates are written to the JSON, so a
-model can choose among them instead.
+heights, measure the exact area of each cross-section, and look for a groove (an
+area dip, lower than both sides) or a lip (a sudden step). Grooves rank first; if
+neither is clear, cut at --fallback of the height. All candidates are written to
+the JSON, so a model can choose among them instead.
 
 The hinge sits on the seam itself: on the cut's outline, at its extreme on the
 --hinge side (back = the asset's rear, glTF -Z), centered along the seam.
@@ -66,28 +66,49 @@ def relaunch_in_blender() -> int:
 # --------------------------------------------------------------------------- inside Blender
 
 
-def seam_candidates(co, edges, z0, z1, band, samples=120):
-    """Footprint profile of horizontal cross-sections, and the heights that look like a seam."""
+def section_area(tri, h):
+    """Exact area of the solid's horizontal cross-section at height h.
+
+    Each triangle crossing h contributes one segment of the section outline. Orienting it
+    by the triangle's outward normal makes the shoelace sum give the enclosed area, so a
+    shallow gap running all round the asset shows up even when brackets or a hasp stick
+    out further than the gap is deep (they would hide it from a bounding box).
+    """
     import numpy as np
 
-    a, b = co[edges[:, 0]], co[edges[:, 1]]
-    za, zb = a[:, 2], b[:, 2]
+    z = tri[:, :, 2]
+    tri = tri[(z.min(axis=1) < h) & (z.max(axis=1) > h)]
+    if len(tri) == 0:
+        return np.nan
+    a, b = tri, tri[:, [1, 2, 0]]
+    za, zb = a[:, :, 2], b[:, :, 2]
+    crosses = (za - h) * (zb - h) < 0
+    t = np.where(crosses, (h - za) / np.where(crosses, zb - za, 1), 0)
+    points = a[:, :, :2] + t[..., None] * (b[:, :, :2] - a[:, :, :2])
+    keep = crosses.sum(axis=1) == 2
+    first_two = np.argsort(~crosses, axis=1, kind="stable")[:, :2]
+    rows = np.arange(len(tri))
+    p, q = points[rows, first_two[:, 0]][keep], points[rows, first_two[:, 1]][keep]
+    normal = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])[keep]
+    # Counter-clockwise outline (seen from above) runs along (-n_y, n_x) for outward normal n.
+    backwards = ((q - p) * np.stack([-normal[:, 1], normal[:, 0]], axis=1)).sum(axis=1) < 0
+    p[backwards], q[backwards] = q[backwards], p[backwards].copy()
+    return 0.5 * float((p[:, 0] * q[:, 1] - p[:, 1] * q[:, 0]).sum())
+
+
+def seam_candidates(tri, z0, z1, band, samples=120):
+    """Cross-section area profile over the height band, and the heights that look like a seam."""
+    import numpy as np
+
     heights = z0 + (z1 - z0) * np.linspace(band[0], band[1], samples)
-    areas = np.full(samples, np.nan)
-    for i, h in enumerate(heights):
-        crossing = (za - h) * (zb - h) < 0
-        if crossing.sum() < 3:
-            continue
-        t = (h - za[crossing]) / (zb[crossing] - za[crossing])
-        points = a[crossing, :2] + t[:, None] * (b[crossing, :2] - a[crossing, :2])
-        width, depth = points.max(axis=0) - points.min(axis=0)
-        areas[i] = width * depth
+    areas = np.array([section_area(tri, h) for h in heights])
+    areas[areas <= 0] = np.nan
 
     valid = np.where(np.isnan(areas), np.nanmedian(areas), areas)
     smooth = np.convolve(np.pad(valid, 1, mode="edge"), np.ones(3) / 3, mode="valid")
     window, candidates = max(2, samples // 12), []
     for i in range(1, samples - 1):
-        # A groove: a local dip in the footprint, relative to the widest nearby section.
+        # A groove: a local dip in the section area.
         if smooth[i] <= smooth[i - 1] and smooth[i] <= smooth[i + 1]:
             # Lower than the sections on BOTH sides; a flat stretch next to a step is not a groove.
             left, right = smooth[max(0, i - window) : i].max(), smooth[i + 1 : i + window + 1].max()
@@ -102,7 +123,7 @@ def seam_candidates(co, edges, z0, z1, band, samples=120):
                     hi += 1
                 middle = (heights[lo] + heights[hi]) / 2
                 candidates.append({"kind": "groove", "fraction": float(np.interp(middle, [z0, z1], [0, 1])), "score": float(depth)})
-        # A lip: the footprint jumps between the sections just below and just above.
+        # A lip: the area jumps between the sections just below and just above.
         if 2 <= i < samples - 2 and smooth[i - 2] > 0 and smooth[i + 2] > 0:
             step = abs(np.log(smooth[i + 2] / smooth[i - 2]))
             neighbours = [abs(np.log(smooth[j + 2] / smooth[j - 2])) for j in (i - 1, i + 1) if 2 <= j < samples - 2]
@@ -116,7 +137,7 @@ def seam_candidates(co, edges, z0, z1, band, samples=120):
     for c in candidates:
         if all(abs(c["fraction"] - m["fraction"]) > 0.02 for m in merged):
             merged.append(c)
-    profile = {"fractions": np.linspace(band[0], band[1], samples).round(4).tolist(), "footprint": np.round(valid, 6).tolist()}
+    profile = {"fractions": np.linspace(band[0], band[1], samples).round(4).tolist(), "section_area": np.round(valid, 6).tolist()}
     return merged[:5], profile
 
 
@@ -150,16 +171,29 @@ def run_in_blender(args) -> None:
     source = meshes[0]
     mesh = source.data
 
+    # glTF import splits vertices along UV and normal seams, which would leave the cut outline
+    # in open pieces that can't be capped. Weld them: Blender keeps UVs per face corner, so
+    # the texture survives.
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    size = max(source.dimensions)
+    welded = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-5 * size)
+    welded -= len(bm.verts)
+    bm.to_mesh(mesh)
+    bm.free()
+
     co = np.empty(len(mesh.vertices) * 3)
     mesh.vertices.foreach_get("co", co)
     co = co.reshape(-1, 3)
-    edges = np.empty(len(mesh.edges) * 2, dtype=np.int64)
-    mesh.edges.foreach_get("vertices", edges)
-    edges = edges.reshape(-1, 2)
+    mesh.calc_loop_triangles()
+    corners = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int64)
+    mesh.loop_triangles.foreach_get("vertices", corners)
+    tri = co[corners.reshape(-1, 3)]
     z0, z1 = float(co[:, 2].min()), float(co[:, 2].max())
-    log(f"input {args.input.name}: {len(mesh.vertices)} vertices, {len(mesh.polygons)} faces, height {z1 - z0:.4f}")
+    log(f"input {args.input.name}: {len(mesh.vertices)} vertices ({welded} welded), {len(mesh.polygons)} faces, height {z1 - z0:.4f}")
 
-    candidates, profile = seam_candidates(co, edges, z0, z1, args.band)
+    candidates, profile = seam_candidates(tri, z0, z1, args.band)
     if args.cut == "auto":
         if candidates:
             fraction, method = candidates[0]["fraction"], f"auto: {candidates[0]['kind']} (score {candidates[0]['score']:.3f})"
@@ -169,6 +203,16 @@ def run_in_blender(args) -> None:
         fraction, method = float(args.cut), "manual --cut"
     cut_z = z0 + fraction * (z1 - z0)
     log(f"cut at {fraction:.3f} of the height ({method}); {len(candidates)} seam candidates")
+
+    # The caps have no UVs, so the asset's texture would smear across them. Give them a
+    # plain dark interior material instead; it reads as the inside of the asset.
+    interior = bpy.data.materials.new("golem_interior")
+    interior.diffuse_color = (0.16, 0.09, 0.05, 1.0)
+    if interior.node_tree and (bsdf := interior.node_tree.nodes.get("Principled BSDF")):
+        bsdf.inputs["Base Color"].default_value = (0.16, 0.09, 0.05, 1.0)
+        bsdf.inputs["Roughness"].default_value = 0.9
+    mesh.materials.append(interior)
+    interior_index = len(mesh.materials) - 1
 
     def half(keep_above: bool):
         """One side of the plane, with the cut capped flat. Returns (mesh, seam vertices)."""
@@ -185,6 +229,8 @@ def run_in_blender(args) -> None:
         cut_edges = [e for e in result["geom_cut"] if isinstance(e, bmesh.types.BMEdge) and e.is_valid]
         seam = np.array([v.co[:] for v in result["geom_cut"] if isinstance(v, bmesh.types.BMVert) and v.is_valid])
         filled = bmesh.ops.holes_fill(bm, edges=cut_edges, sides=0)["faces"]
+        for face in filled:
+            face.material_index = interior_index
         part = mesh.copy()
         bm.to_mesh(part)
         bm.free()

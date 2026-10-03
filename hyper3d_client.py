@@ -1,23 +1,26 @@
-"""Hyper3D Rodin client: text prompt -> generation job -> poll -> download the .glb.
+"""Hyper3D client: text prompt -> Rodin Gen-2.5 model -> .glb in assets/raw/, plus BANG splits.
 
-Rodin API (docs.hyper3d.ai, Gen-2.5):
-  POST /api/v2/rodin     multipart form -> {uuid, jobs: {uuids, subscription_key}, consumed}
-  POST /api/v2/status    {"subscription_key"} -> {jobs: [{uuid, status}]},
-                         status is Waiting | Generating | Done | Failed
-  POST /api/v2/download  {"task_uuid"} -> {list: [{name, url}]}; URLs expire, so download at once
+Drives the official Hyper3D CLI (npm: @hyper3d/cli) with JSON output. The CLI signs in
+through the browser (`hyper3d auth login`), so no static API key is needed; raw REST
+keys are locked to Hyper3D's Business tier.
 
-Every submitted job is recorded in assets/raw/<name>.job.json the moment it is
-accepted, so an interrupted run can be resumed without paying again.
+Every billable job is recorded in assets/raw/<name>.job.json the moment the CLI accepts
+it, so an interrupted run resumes without paying twice. The CLI never retries billable
+requests itself, and neither does this script.
 
 Usage:
-  python hyper3d_client.py ping
+  python hyper3d_client.py auth
   python hyper3d_client.py generate "wooden treasure chest with a hinged lid, closed" --name chest
+  python hyper3d_client.py bang chest --instruction "separate the lid from the body"
   python hyper3d_client.py resume assets/raw/chest.job.json
 """
 
 import argparse
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -25,25 +28,74 @@ from pathlib import Path
 
 import requests
 
-from golem_secrets import get_secret
-
-API = "https://api.hyper3d.com/api/v2"
 RAW_DIR = Path(__file__).resolve().parent / "assets" / "raw"
-TIERS = ["Gen-2.5-Extreme-Low", "Gen-2.5-Low", "Gen-2.5-Medium", "Gen-2.5-High", "Gen-2.5-Extreme-High"]
-DEFAULT_TIER = "Gen-2.5-Medium"
-# The docs ask for polling from 5 s, backing off to at most 30 s.
+TIERS = ["Gen-2.5-Extreme-Low", "Gen-2.5-Medium", "Gen-2.5-High"]
 POLL_FIRST, POLL_MAX = 5.0, 30.0
+DONE = {"done", "completed", "complete", "succeeded", "success", "finished"}
+FAILED = {"failed", "failure", "error", "cancelled", "canceled"}
 
 
-def _post(endpoint: str, **kwargs) -> requests.Response:
-    """POST to the Rodin API; turns auth and request errors into readable exits."""
-    headers = {"Authorization": f"Bearer {get_secret('HYPER3D_API_KEY')}"}
-    response = requests.post(f"{API}/{endpoint}", headers=headers, timeout=60, **kwargs)
-    if response.status_code == 401:
-        raise SystemExit("Hyper3D rejected the API key (HTTP 401). Check HYPER3D_API_KEY in secrets.env.")
-    if response.status_code >= 400 and response.status_code != 429:
-        raise SystemExit(f"Hyper3D /{endpoint} failed: HTTP {response.status_code}: {response.text[:500]}")
-    return response
+def _cli() -> list[str]:
+    """Run the CLI's JavaScript entry with Node directly: going through the Windows .cmd
+    shim would let cmd.exe reinterpret quotes and '&' inside prompts."""
+    script = os.environ.get("HYPER3D_CLI_JS")
+    if not script:
+        shim = shutil.which("hyper3d")
+        if not shim:
+            raise SystemExit("Hyper3D CLI not found. Run: npm install --global @hyper3d/cli@latest")
+        script = str(Path(shim).parent / "node_modules" / "@hyper3d" / "cli" / "dist" / "index.js")
+    node = shutil.which("node")
+    if not node or not Path(script).exists():
+        raise SystemExit(f"Cannot run the Hyper3D CLI (node={node}, script={script}). Set HYPER3D_CLI_JS.")
+    return [node, script]
+
+
+def run(*args: str) -> dict:
+    """One CLI call with JSON output. Exits with the CLI's own error message on failure."""
+    env = {**os.environ, "HYPER3D_UPDATE_CHECK": "0"}  # no update prompts mid-pipeline
+    result = subprocess.run(
+        [*_cli(), *args, "--output", "json"], capture_output=True, text=True, encoding="utf-8", env=env
+    )
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout).strip()
+        if "auth" in message.lower() or "sign" in message.lower():
+            message += "\nSign in again with: hyper3d auth login --no-browser"
+        raise SystemExit(f"hyper3d {args[0]} failed: {message}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise SystemExit(f"hyper3d {args[0]} returned non-JSON output: {result.stdout[:500]}")
+
+
+def _find(data, keys):
+    """First value under any of `keys`, searching nested dicts and lists."""
+    if isinstance(data, dict):
+        for key in keys:
+            if data.get(key) not in (None, ""):
+                return data[key]
+        values = data.values()
+    elif isinstance(data, list):
+        values = data
+    else:
+        return None
+    for value in values:
+        found = _find(value, keys)
+        if found is not None:
+            return found
+    return None
+
+
+def _urls(data, found=None) -> list[str]:
+    found = [] if found is None else found
+    if isinstance(data, str) and data.startswith("http"):
+        found.append(data)
+    elif isinstance(data, dict):
+        for value in data.values():
+            _urls(value, found)
+    elif isinstance(data, list):
+        for value in data:
+            _urls(value, found)
+    return found
 
 
 def _now() -> str:
@@ -54,95 +106,100 @@ def _save(job: dict) -> None:
     Path(job["manifest"]).write_text(json.dumps(job, indent=2), encoding="utf-8")
 
 
-def submit(prompt: str, name: str, tier: str, quality_override: int | None) -> dict:
-    """Start a text-to-3D job and record it before anything else can go wrong."""
+def _start(name: str, args: list[str], record: dict) -> dict:
+    """Submit a billable CLI command and record it before anything else can go wrong."""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     manifest = RAW_DIR / f"{name}.job.json"
     if manifest.exists():
         raise SystemExit(f"{manifest} already exists: pick another --name, or resume that job.")
-
-    # Text fields still go as multipart/form-data, which the API requires.
-    form = {"prompt": prompt, "tier": tier, "geometry_file_format": "glb"}
-    if quality_override is not None:
-        form["quality_override"] = str(quality_override)
-    response = _post("rodin", files={key: (None, value) for key, value in form.items()})
-    if response.status_code == 429:
-        raise SystemExit("Hyper3D is throttling new jobs (HTTP 429). Wait a minute and retry.")
-    body = response.json()
-
+    response = run(*args)
+    generation_id = _find(response, ["generation_id", "generationId", "id", "uuid", "task_uuid"])
+    if not generation_id:
+        raise SystemExit(f"No generation id in the CLI response: {json.dumps(response)[:500]}")
     job = {
         "name": name,
-        "prompt": prompt,
-        "tier": tier,
-        "task_uuid": body["uuid"],
-        "subscription_key": body["jobs"]["subscription_key"],
-        "credits_consumed": body.get("consumed"),
+        **record,
+        "generation_id": generation_id,
         "submitted_at": _now(),
+        "submit_response": response,
         "manifest": str(manifest),
     }
     _save(job)
-    print(f"[submit] {name}: task {job['task_uuid']}, {job['credits_consumed']} credits, tier {tier}")
+    print(f"[submit] {name}: generation {generation_id}")
     return job
 
 
+def generate(prompt, name, tier, quality, mesh_mode) -> dict:
+    args = ["generate", "--prompt", prompt, "--format", "glb"]
+    if tier:
+        args += ["--tier", tier]
+    if quality:
+        args += ["--quality", str(quality)]
+    if mesh_mode:
+        args += ["--mesh-mode", mesh_mode]
+    return _start(name, args, {"kind": "generate", "prompt": prompt, "tier": tier or "server default"})
+
+
+def bang(source: str, instruction, strength, name) -> dict:
+    """Split a finished generation into parts. `source` is a job name or a generation id."""
+    manifest = RAW_DIR / f"{source}.job.json"
+    source_id = json.loads(manifest.read_text())["generation_id"] if manifest.exists() else source
+    args = ["bang", source_id, "--format", "glb"]
+    if instruction:
+        args += ["--instruction", instruction]
+    if strength:
+        args += ["--strength", str(strength)]
+    record = {"kind": "bang", "source_generation_id": source_id, "instruction": instruction, "strength": strength}
+    return _start(name or f"{source}_bang", args, record)
+
+
 def wait(job: dict, timeout_minutes: float) -> None:
-    """Poll until every job is Done; exit on Failed or timeout."""
+    """Check status (5 s, backing off to 30 s) until done; exit on failure or timeout."""
     start, interval, last = time.monotonic(), POLL_FIRST, None
     while True:
         time.sleep(interval)
-        response = _post("status", json={"subscription_key": job["subscription_key"]})
+        response = run("status", job["generation_id"])
+        status = str(_find(response, ["status", "state"]) or "unknown")
         elapsed = time.monotonic() - start
-        if response.status_code == 429:
-            interval = float(response.headers.get("Retry-After", POLL_MAX))
-            print(f"[status] throttled, retrying in {interval:.0f} s")
-            continue
-
-        statuses = [j["status"] for j in response.json().get("jobs", [])]
-        summary = ", ".join(statuses) or "no jobs yet"
-        if summary != last:
-            print(f"[status] {elapsed:5.0f} s  {summary}")
-            last = summary
-        if "Failed" in statuses:
-            job["failed_at"] = _now()
+        if status != last:
+            print(f"[status] {elapsed:5.0f} s  {status}")
+            last = status
+        if status.lower() in FAILED:
+            job["failed_at"], job["status_response"] = _now(), response
             _save(job)
-            raise SystemExit(f"Hyper3D reports the job Failed after {elapsed:.0f} s. Record: {job['manifest']}")
-        if statuses and all(s == "Done" for s in statuses):
-            job["generation_seconds"] = round(elapsed)
+            raise SystemExit(f"Hyper3D reports '{status}' after {elapsed:.0f} s. Record: {job['manifest']}")
+        if status.lower() in DONE:
+            job["generation_seconds"], job["status_response"] = round(elapsed), response
             _save(job)
             return
         if elapsed > timeout_minutes * 60:
-            raise SystemExit(f"Still not Done after {timeout_minutes} min. Resume later: {job['manifest']}")
+            raise SystemExit(f"Still '{status}' after {timeout_minutes} min. Resume later: {job['manifest']}")
         interval = min(interval * 1.5, POLL_MAX)
 
 
-def download(job: dict) -> Path:
-    """Fetch the result files right away (their URLs expire). Returns the .glb path."""
-    files = _post("download", json={"task_uuid": job["task_uuid"]}).json().get("list", [])
-    glbs = [f for f in files if f["name"].lower().endswith(".glb")]
-    if not glbs:
-        raise SystemExit(f"No .glb in the download list: {[f['name'] for f in files]}")
-
+def download(job: dict) -> list[Path]:
+    """Fetch the result files at once (their URLs can expire) and keep the .glb ones."""
+    response = run("result", job["generation_id"])
+    # Rodin returns e.g. base_basic_pbr.glb and base_basic_shaded.glb: the PBR one becomes
+    # <name>.glb, the others <name>_<variant>.glb.
+    files = response.get("files") or [{"name": "", "url": url} for url in _urls(response)]
+    files = sorted(files, key=lambda f: "pbr" not in f.get("name", ""))
+    urls = [f["url"] for f in files]
     saved = []
-    for i, item in enumerate(glbs):
-        target = RAW_DIR / (f"{job['name']}.glb" if i == 0 else f"{job['name']}_{i}.glb")
+    for item in files:
         content = requests.get(item["url"], timeout=300).content
         if content[:4] != b"glTF":
-            raise SystemExit(f"{item['name']} is not a binary glTF file (starts with {content[:4]!r}).")
+            continue  # previews, textures and other non-GLB files
+        variant = Path(item.get("name", "")).stem.replace("base_basic_", "") or str(len(saved))
+        target = RAW_DIR / (f"{job['name']}.glb" if not saved else f"{job['name']}_{variant}.glb")
         target.write_bytes(content)
-        saved.append(str(target))
+        saved.append(target)
         print(f"[download] {target.name}: {len(content) / 1e6:.1f} MB")
-
-    job["files_available"] = [f["name"] for f in files]
-    job["glb"] = saved
-    job["downloaded_at"] = _now()
+    if not saved:
+        raise SystemExit(f"No binary glTF among {len(urls)} result URLs: {json.dumps(response)[:500]}")
+    job["result_response"], job["glb"], job["downloaded_at"] = response, [str(p) for p in saved], _now()
     _save(job)
-    return Path(saved[0])
-
-
-def ping() -> None:
-    """Check the key without spending credits: ask for the status of a job that doesn't exist."""
-    response = _post("status", json={"subscription_key": "golem-auth-check"})
-    print(f"Hyper3D API key accepted (HTTP {response.status_code} for a dummy status query; 401 would mean a bad key).")
+    return saved
 
 
 def _slug(text: str) -> str:
@@ -152,28 +209,36 @@ def _slug(text: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("ping", help="check the API key (no credits used)")
-    generate = commands.add_parser("generate", help="text prompt -> .glb in assets/raw/")
-    generate.add_argument("prompt")
-    generate.add_argument("--name", help="file name (default: from the prompt)")
-    generate.add_argument("--tier", default=DEFAULT_TIER, choices=TIERS)
-    generate.add_argument("--quality-override", type=int, help="passed through as quality_override (API max 20000)")
-    generate.add_argument("--timeout", type=float, default=15, help="minutes to wait (default 15)")
-    resume = commands.add_parser("resume", help="continue polling and downloading a recorded job")
+    commands.add_parser("auth", help="show the signed-in account and credit balances (free)")
+    gen = commands.add_parser("generate", help="text prompt -> .glb in assets/raw/")
+    gen.add_argument("prompt")
+    gen.add_argument("--name", help="file name (default: from the prompt)")
+    gen.add_argument("--tier", choices=TIERS, help="default: the server's (Gen-2.5-Medium)")
+    gen.add_argument("--quality", type=int, help="target polygon count (Raw 500-1,000,000)")
+    gen.add_argument("--mesh-mode", choices=["Raw", "Quad"])
+    split = commands.add_parser("bang", help="split a finished model into parts")
+    split.add_argument("source", help="job name (e.g. chest) or generation id")
+    split.add_argument("--instruction", help='e.g. "separate the lid from the body"; omit for automatic')
+    split.add_argument("--strength", type=int, help="soft target part count, 1-12")
+    split.add_argument("--name", help="file name (default: <source>_bang)")
+    resume = commands.add_parser("resume", help="continue a recorded job")
     resume.add_argument("manifest", type=Path)
-    resume.add_argument("--timeout", type=float, default=15)
+    for sub in (gen, split, resume):
+        sub.add_argument("--timeout", type=float, default=15, help="minutes to wait (default 15)")
     args = parser.parse_args()
 
-    if args.command == "ping":
-        ping()
+    if args.command == "auth":
+        print(json.dumps(run("auth", "status"), indent=2))
         return 0
     if args.command == "generate":
-        job = submit(args.prompt, args.name or _slug(args.prompt), args.tier, args.quality_override)
+        job = generate(args.prompt, args.name or _slug(args.prompt), args.tier, args.quality, args.mesh_mode)
+    elif args.command == "bang":
+        job = bang(args.source, args.instruction, args.strength, args.name)
     else:
         job = json.loads(args.manifest.read_text(encoding="utf-8"))
     wait(job, args.timeout)
-    glb = download(job)
-    print(f"[done] {glb}")
+    for path in download(job):
+        print(f"[done] {path}")
     return 0
 
 

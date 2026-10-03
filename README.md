@@ -14,7 +14,7 @@ AI models only make discrete choices: what a part is, which part it hangs from, 
 
 | Stage | What happens |
 |---|---|
-| 1. Generate | Text prompt → Hyper3D Rodin API → `.glb` |
+| 1. Generate | Text prompt → Hyper3D Rodin Gen-2.5 through the official CLI (browser sign-in; `hyper3d_client.py`) → `.glb` |
 | 2. Split | The layered segmenter (below) separates moving parts from the body |
 | 3. Candidates | Oriented boxes per part → candidate hinge and slide axes |
 | 4. Choose | A model labels parts and joint types; geometry and a sweep test pick the hinge |
