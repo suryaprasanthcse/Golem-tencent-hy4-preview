@@ -36,3 +36,6 @@ Thumbs.db
 
 # Written by the Editor during a timed rebuild
 assets/unity_timing.json
+
+# Release archive of the generated models (published as a release asset, not committed)
+assets_release.zip

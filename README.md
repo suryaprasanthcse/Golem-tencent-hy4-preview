@@ -4,7 +4,7 @@
 
 Text-to-3D can give you a treasure chest in two minutes, but the lid is welded shut: one solid mesh, no parts, no pivots, no mass. In a game that's scenery, not a prop. GOLEM turns that statue into a mechanically interactive, physics-ready game entity. Lids swing on their real hinge line, doors open, drawers slide, and every part carries a mass computed from its own geometry. The same 30 kg ball that tips a 17 kg toolbox onto its side moves a 59 kg filing cabinet 4 cm.
 
-**Hyper3D generates it in about 2 minutes. GOLEM makes it interactive in under 5 seconds, on a laptop.**
+**Hyper3D generates it in about 2 minutes. GOLEM makes it interactive in under 5 seconds per asset.**
 
 ![Five AI-generated props, every moving part open](docs/stage_open.png)
 
@@ -22,7 +22,7 @@ Built for the Cambridge × Arcade AI Hackathon, Game Tech track (Tencent Cloud �
 - **Real joints, not animations.** Hinges (revolute) and sliders (prismatic) become Unity `ArticulationBody` joints with limits, driven by motors and simulated by PhysX. Drag any part with the mouse and it follows its own path: lids up, doors around, drawers out.
 - **Geometry does the maths.** Pivots, hinge axes, joint limits, colliders and masses are computed from the mesh. Nobody places a pivot by hand.
 - **Mass from real mesh volume.** Each part weighs its enclosed mesh volume times an effective density for its material, at real-world scale. The chest lid is 15.7 kg; the vault door is 2.8 t. That is why the same 30 kg ball tips the toolbox onto its side and only nudges the cabinet.
-- **Artist-in-the-Loop.** A person makes the creative calls in a few words ("these parts are the door, hinged on the left, opening toward the front") and GOLEM does the rest. These are discrete choices, so a vision model can make them later without changing anything downstream.
+- **Artist-in-the-Loop, built for Tencent vision models.** Today a person makes the creative calls in a few words ("these parts are the door, hinged on the left, opening toward the front") and GOLEM does the rest. Every call is a discrete choice, which is exactly the job a vision model on Tencent TokenHub can take over without changing anything downstream.
 - **Engine-agnostic output.** Each prop is a standard glTF 2.0 `.glb` (one node per part; a hinged part's origin sits on its pivot) plus a JSON joint manifest. The Unity importer ships with this repo; any engine with hinge and slider joints can consume the same pair.
 - **Measured, not claimed.** A headless self-test drives every joint and checks its direction and travel, and a play-mode audit records how far each prop tilts and slides. Every number on this page comes from those tools.
 
@@ -147,9 +147,45 @@ Interactive props are only useful if they don't fall over when you use them. The
 
 ![Vault door close-up, swung open](docs/vault_open.png)
 
+## Production architecture: GOLEM on Tencent Cloud
+
+The demo runs on one machine. A live game needs GOLEM as a service: thousands of props generated, split, checked and shipped continuously, with Tencent's 3D and vision models doing the work a person does today. This is the deployment GOLEM is designed for. It is a design, not yet deployed:
+
+```
+ game team / live-ops tools ──► GOLEM job queue
+                                     │
+        ┌────────────────────────────┼─────────────────────────────┐
+        ▼                            ▼                             ▼
+ Hyper3D REST API             Tencent Cloud GPU instance    Tencent TokenHub
+ (Business tier)              Hunyuan3D-Part, self-hosted   HY-3D-Component;
+ Rodin Gen-2.5 + BANG         (P3-SAM part segmentation)    a vision model makes the
+        │                            │                      Artist-in-the-Loop choices
+        └───────────────► Tencent Cloud CVM workers ◄──────────────┘
+                          headless Blender split jobs, many in parallel
+                                     │
+                                     ▼
+                          Unity batch-mode self-test (pass/fail gate)
+                                     │
+                                     ▼
+                Tencent Cloud COS + CDN: .glb + joint manifest to game clients
+```
+
+- **A GPU for Tencent's segmentation model.** Hunyuan3D-Part needs far more GPU memory than a laptop's 4 GB card, so on a Tencent Cloud GPU instance it becomes a first-class splitter next to BANG and the cutter, for the assets neither handles.
+- **Throughput by scaling out.** At the measured 4.5 s of GOLEM work per prop, a 1,000-prop catalogue is about 75 minutes in series on one machine. Every prop is independent, so across a pool of CVM workers that time divides by the number of workers.
+- **A quality gate that already exists.** The Unity self-test runs headless today (`-batchmode`, exit code 0 on pass), so every asset can be checked before it ships.
+- **Delivery.** The output is a `.glb` plus a small JSON manifest per prop, ready for object storage and a CDN.
+
+**Built today:** the Hyper3D client with job records and resume, both splitters running headless, the joint manifest, the Unity importer, the batch-mode self-test and the metrics. **Next:** the queue, the worker pool, the TokenHub and GPU-hosted Tencent models.
+
+### The automation path: Tencent TokenHub
+
+GOLEM's design principle (the model chooses, the geometry computes) exists so a vision model can drop in. Every Artist-in-the-Loop decision is a pick from a short list: which parts move, hinge or slider, which side, which way. That is the kind of question a vision model on Tencent TokenHub answers from a rendered view of the parts, returning an ID rather than a coordinate, so a wrong answer is visible and cheap to correct. Tencent's part-aware 3D models (HY-3D-Component on TokenHub, and the open Hunyuan3D-Part) add a segmentation tier for the assets BANG leaves fused. With those in place, the artist moves from operator to reviewer: Artist-in-the-Loop stays as the override and the production safety net, and the routine calls are automated.
+
+Tencent Cloud access for hackathon participants was still being provisioned while we built, so these tiers are the next step, not code in this repository.
+
 ## Hyper3D
 
-Every prop's geometry and textures come from **Hyper3D Rodin Gen-2.5**; **Hyper3D BANG** split the two complex ones into parts. Hyper3D's REST keys need the Business tier, so `hyper3d_client.py` drives Hyper3D's official CLI (`@hyper3d/cli` 0.2.0, browser sign-in). It records every billable job in `assets/raw/<name>.job.json` the moment the CLI accepts it, so an interrupted run resumes without paying twice.
+Every prop's geometry and textures come from **Hyper3D Rodin Gen-2.5**; **Hyper3D BANG** split the two complex ones into parts. For rapid prototyping, `hyper3d_client.py` drives Hyper3D's official CLI (`@hyper3d/cli` 0.2.0, browser sign-in). Production moves to Hyper3D's REST API (Business tier) for unattended, server-side generation; `hyper3d_client.py` is the only module that talks to Hyper3D, so that switch stays inside one file. The client records every billable job in `assets/raw/<name>.job.json` the moment Hyper3D accepts it, so an interrupted run resumes without paying twice.
 
 | Job | Prompt or instruction |
 |---|---|
@@ -173,9 +209,9 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 .venv/Scripts/python -m unittest          # cutter tests
 ```
 
-**1. Get models.** The generated models (166 MB) are not in git.
-<!-- TODO: attach assets/raw + assets/split as a release archive and link it here -->
-- Download the asset pack (_link_) and unzip it at the repository root, or
+**1. Get models.** The generated models are not in git.
+<!-- TODO: link the release asset once the repository is published -->
+- Download `assets_release.zip` from this repository's release and unzip it at the repository root (it holds `assets/raw/` and `assets/split/`), or
 - generate your own: `hyper3d auth login`, then for example
   `python hyper3d_client.py generate "wooden treasure chest with a hinged lid, closed" --name chest`
   (and `python hyper3d_client.py bang <name> --instruction "..."` for multi-part models).
@@ -199,12 +235,12 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 
 ## Limits, honestly
 
-- **Part roles are chosen by a person.** Artist-in-the-Loop is the shipped path. The vision-model step is designed (choices are discrete on purpose) but not wired up: Tencent Cloud inference (TokenHub) was blocked behind account verification throughout the build, so the planned Tencent tiers (HY-3D-Component and Hunyuan3D-Part segmentation) are roadmap, not code.
+- **Part roles are chosen by a person.** Artist-in-the-Loop is the shipped path. The TokenHub vision step and the Tencent segmentation tiers are designed in (choices are discrete on purpose) but not yet wired up, because Tencent Cloud access was still being provisioned during the build.
 - **Generation and BANG follow instructions only partly.** The cabinet came out with four drawer fronts although the prompt and the BANG instruction both said three, and BANG separated only three of them; asked to separate the vault's locking wheel, BANG left it fused to the door, so the wheel doesn't spin. `--carve` recovers fused parts like the fourth drawer front.
 - **Generated meshes are solid.** Drawers are fronts without boxes, cut lids are capped, and masses use per-prop effective densities ([`golem_sizes.json`](golem_sizes.json)) to stand in for hollow real objects.
 - **The cutter does horizontal lids only.** Everything else goes through BANG and the assembler.
 - **Dragging uses a straight-line mapping.** The grabbed point ends 0–23 px from the cursor, but the big vault door trails it by up to 76 px (in an 846 px view) because its arc is curved.
-- **One importer.** Unity is the only engine with an importer today.
+- **One importer, one machine.** Unity is the only engine with an importer today, and the production architecture above is a design, not a deployment.
 
 ## Compliance and AI disclosure
 
