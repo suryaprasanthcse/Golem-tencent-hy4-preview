@@ -24,10 +24,10 @@ namespace Golem.EditorTools
         static string SplitRoot => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "assets", "split"));
         static string SizesPath => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "golem_sizes.json"));
 
-        [System.Serializable] class PropSize { public string name; public float size_m; public float density; }
+        [System.Serializable] internal class PropSize { public string name; public float size_m; public float density; public bool anchored; }
         [System.Serializable] class SizeTable { public PropSize[] props; }
 
-        static PropSize SizeFor(string name)
+        internal static PropSize SizeFor(string name)
         {
             if (!File.Exists(SizesPath))
                 return null;

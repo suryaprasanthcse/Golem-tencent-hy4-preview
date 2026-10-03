@@ -13,6 +13,11 @@ namespace Golem
     /// </summary>
     public static class GolemArticulator
     {
+        const float FootprintBand = 0.02f;       // metres: base vertices this close to the lowest one carry the prop
+        const float FootprintThickness = 0.01f;  // metres
+        const float DriveHz = 10f;  // natural frequency of every joint drive: at 5 Hz a laptop screen sagged 2 deg under its own weight
+
+
         public static Vector3 GltfPoint(float[] p) => new Vector3(-p[0], p[1], p[2]);
         public static Vector3 GltfDirection(float[] d) => new Vector3(-d[0], d[1], d[2]);
         public static Vector3 GltfRotationAxis(float[] a) => new Vector3(a[0], -a[1], -a[2]);
@@ -40,7 +45,10 @@ namespace Golem
 
                 var parentBody = EnsureBody(parent, partNames);
                 if (parentBody.isRoot)
+                {
                     parentBody.immovable = true;  // the body stays put; its parts move
+                    AddFootprint(parent, partNames);
+                }
                 var childBody = EnsureBody(child, partNames);
                 childBody.mass = EstimateMass(child, partNames, density);
                 parentBody.mass = EstimateMass(parent, partNames, density);
@@ -66,9 +74,14 @@ namespace Golem
                 var unit = joint.type == "prismatic" ? scale : 1f;
                 drive.lowerLimit = joint.limits_deg[0] * unit;
                 drive.upperLimit = joint.limits_deg[1] * unit;
-                // Motor strength grows with the part's mass, so heavy doors move like light lids.
-                drive.stiffness = Mathf.Max(400f, 40f * childBody.mass);
-                drive.damping = Mathf.Max(40f, 4f * childBody.mass);
+                // An acceleration drive scales stiffness and damping by the joint's own inertia, so one
+                // setting (critically damped, DriveHz) tracks a 0.9 kg screen and a 2.8 t door equally
+                // closely. Gains scaled by mass alone left a heavy chest lid trailing its target and
+                // slamming into its limit: the load is the inertia about the hinge, not the mass.
+                var omega = 2f * Mathf.PI * DriveHz;
+                drive.driveType = ArticulationDriveType.Acceleration;
+                drive.stiffness = omega * omega;
+                drive.damping = 2f * omega;
                 drive.forceLimit = float.MaxValue;
                 // Start as generated: closed for a lid, standing open for a laptop screen.
                 drive.target = Mathf.Clamp(joint.rest_deg * unit, drive.lowerLimit, drive.upperLimit);
@@ -105,6 +118,32 @@ namespace Golem
             }
             // TryGetComponent, not "??": the Editor's fake-null objects would fool the ?? operator.
             return part.TryGetComponent(out ArticulationBody body) ? body : part.gameObject.AddComponent<ArticulationBody>();
+        }
+
+        /// <summary>A flat base under a root part. Generated bases are rarely flat (the chest's varies by
+        /// 2 cm), so a body resting on its convex hull rocks from one facet to another as its centre of
+        /// mass moves: the chest rocked 8 deg as its lid opened. The footprint is a thin box at the part's
+        /// lowest point, spanning its vertices within FootprintBand of it, so the prop stands on its whole
+        /// base like the real object.</summary>
+        static void AddFootprint(Transform part, System.Collections.Generic.HashSet<string> partNames)
+        {
+            const string name = "GOLEM Footprint";
+            if (part.Find(name) != null)
+                return;
+            var points = OwnMeshes(part, partNames).Where(f => f.sharedMesh.isReadable)
+                .SelectMany(f => f.sharedMesh.vertices.Select(v => f.transform.TransformPoint(v))).ToList();
+            if (points.Count == 0)
+                return;
+            var bottom = points.Min(p => p.y);
+            var basePoints = points.Where(p => p.y < bottom + FootprintBand).ToList();
+            var min = new Vector3(basePoints.Min(p => p.x), bottom, basePoints.Min(p => p.z));
+            var max = new Vector3(basePoints.Max(p => p.x), bottom + FootprintThickness, basePoints.Max(p => p.z));
+            var footprint = new GameObject(name).transform;
+            footprint.SetParent(part, false);
+            footprint.SetPositionAndRotation((min + max) / 2, Quaternion.identity);
+            var box = footprint.gameObject.AddComponent<BoxCollider>();
+            var s = footprint.lossyScale;
+            box.size = new Vector3((max.x - min.x) / s.x, (max.y - min.y) / s.y, (max.z - min.z) / s.z);
         }
 
         /// <summary>density x the part's enclosed mesh volume (world scale). The cut parts are capped,

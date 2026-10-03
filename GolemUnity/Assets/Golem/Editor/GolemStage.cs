@@ -34,8 +34,11 @@ namespace Golem.EditorTools
                 return "no GOLEM props in the scene: run Import Split Props first";
 
             LayOut(props);
-            foreach (var body in props.Select(p => p.GetComponentInChildren<ArticulationBody>()).Where(b => b != null && b.isRoot))
-                body.immovable = false;  // free bodies, so an impact can move them by their real mass
+            // Free bodies, so an impact can move them by their real mass; fixtures (a vault door is
+            // set in a wall) stay put. The vault's 2.8 t door outweighs its frame, so free-standing it topples.
+            foreach (var prop in props)
+                if (prop.GetComponentInChildren<ArticulationBody>() is { isRoot: true } body)
+                    body.immovable = GolemMenu.SizeFor(prop.name.Replace(Suffix, ""))?.anchored == true;
 
             var all = BoundsOf(props);
             var surface = Material(new Color(0.16f, 0.16f, 0.17f), 0.25f);
