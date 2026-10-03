@@ -1332,8 +1332,10 @@ Material:
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
   m_CustomRenderQueue: -1
-  stringTagMap: {}
-  disabledShaderPasses: []
+  stringTagMap:
+    RenderType: Opaque
+  disabledShaderPasses:
+  - MOTIONVECTORS
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
@@ -1432,7 +1434,7 @@ Material:
     - _ZWrite: 1
     m_Colors:
     - _BaseColor: {r: 0.16, g: 0.16, b: 0.17, a: 1}
-    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _Color: {r: 0.15999997, g: 0.15999997, b: 0.16999996, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
   m_BuildTextureStacks: []
@@ -1454,8 +1456,10 @@ Material:
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
   m_CustomRenderQueue: -1
-  stringTagMap: {}
-  disabledShaderPasses: []
+  stringTagMap:
+    RenderType: Opaque
+  disabledShaderPasses:
+  - MOTIONVECTORS
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
@@ -1554,7 +1558,7 @@ Material:
     - _ZWrite: 1
     m_Colors:
     - _BaseColor: {r: 0.11, g: 0.11, b: 0.12, a: 1}
-    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _Color: {r: 0.10999996, g: 0.10999996, b: 0.11999995, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
   m_BuildTextureStacks: []
@@ -1693,8 +1697,10 @@ Material:
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
   m_CustomRenderQueue: -1
-  stringTagMap: {}
-  disabledShaderPasses: []
+  stringTagMap:
+    RenderType: Opaque
+  disabledShaderPasses:
+  - MOTIONVECTORS
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
@@ -1793,7 +1799,7 @@ Material:
     - _ZWrite: 1
     m_Colors:
     - _BaseColor: {r: 0.75, g: 0.12, b: 0.08, a: 1}
-    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _Color: {r: 0.75, g: 0.11999995, b: 0.079999976, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
   m_BuildTextureStacks: []
@@ -2591,8 +2597,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 15.6720705
-  m_ParentAnchorPosition: {x: -0.00035890937, y: 0.924643, z: -0.6568294}
-  m_ParentAnchorRotation: {x: 0, y: 0, z: -1, w: 0}
+  m_ParentAnchorPosition: {x: -0.00035894604, y: 0.9246459, z: -0.6568298}
+  m_ParentAnchorRotation: {x: -6.8667246e-11, y: 0.00000005867377, z: -1, w: 4.8657092e-11}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: 0, z: -1, w: 0}
   m_MatchAnchors: 1
@@ -2707,8 +2713,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 0.4554478
-  m_ParentAnchorPosition: {x: 0.007806269, y: 1.2534531, z: 0.65800226}
-  m_ParentAnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
+  m_ParentAnchorPosition: {x: 0.007806466, y: 1.253458, z: 0.65800256}
+  m_ParentAnchorRotation: {x: -2.6238986e-10, y: -0.70710677, z: -7.820209e-10, w: 0.70710677}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
   m_MatchAnchors: 1
@@ -2998,8 +3004,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 0.4186656
-  m_ParentAnchorPosition: {x: 0.010187147, y: 1.6349542, z: 0.6554236}
-  m_ParentAnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
+  m_ParentAnchorPosition: {x: 0.010187345, y: 1.6349597, z: 0.6554241}
+  m_ParentAnchorRotation: {x: -0.0000000014341359, y: -0.7071069, z: -1.6849433e-10, w: 0.70710665}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
   m_MatchAnchors: 1
@@ -3382,8 +3388,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 2811.1123
-  m_ParentAnchorPosition: {x: 0, y: 0, z: 0}
-  m_ParentAnchorRotation: {x: 0, y: 0, z: 0.70710677, w: 0.70710677}
+  m_ParentAnchorPosition: {x: 0.738432, y: 0.8531299, z: 0.2597217}
+  m_ParentAnchorRotation: {x: -0.0000000020476618, y: 0.0000000013273787, z: 0.70710677, w: 0.70710677}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: 0, z: 0.70710677, w: 0.70710677}
   m_MatchAnchors: 1
@@ -3636,8 +3642,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 0.97649574
-  m_ParentAnchorPosition: {x: 0.006269983, y: 0.3949371, z: 0.66100794}
-  m_ParentAnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
+  m_ParentAnchorPosition: {x: 0.0062701805, y: 0.3949421, z: 0.6610078}
+  m_ParentAnchorRotation: {x: 0.0000000022341626, y: -0.7071068, z: 0.0000000021003976, w: 0.7071067}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
   m_MatchAnchors: 1
@@ -3896,8 +3902,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 0.4675807
-  m_ParentAnchorPosition: {x: 0.010906007, y: 0.8597646, z: 0.6625871}
-  m_ParentAnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
+  m_ParentAnchorPosition: {x: 0.010906205, y: 0.8597693, z: 0.66258734}
+  m_ParentAnchorRotation: {x: 7.974452e-11, y: -0.70710677, z: -6.0195016e-10, w: 0.70710677}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: -0.70710677, z: 0, w: 0.70710677}
   m_MatchAnchors: 1
@@ -4047,8 +4053,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 5.0245214
-  m_ParentAnchorPosition: {x: 0.0009587334, y: 0.75072515, z: -0.5723607}
-  m_ParentAnchorRotation: {x: 0, y: 0, z: -1, w: 0}
+  m_ParentAnchorPosition: {x: 0.0009591186, y: 0.750726, z: -0.5723611}
+  m_ParentAnchorRotation: {x: -2.3078417e-10, y: 0.00000000558792, z: -1, w: -7.003108e-11}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: 0, z: -1, w: 0}
   m_MatchAnchors: 1
@@ -4198,8 +4204,8 @@ ArticulationBody:
   m_Enabled: 1
   serializedVersion: 6
   m_Mass: 0.88679504
-  m_ParentAnchorPosition: {x: 0.0058592483, y: 0.15635335, z: -0.5216418}
-  m_ParentAnchorRotation: {x: 0, y: 0, z: -1, w: 0}
+  m_ParentAnchorPosition: {x: 0.0058585405, y: 0.15635362, z: -0.5216413}
+  m_ParentAnchorRotation: {x: -1.1397022e-11, y: 0.000000014668411, z: -1, w: -2.5323356e-11}
   m_AnchorPosition: {x: 0, y: 0, z: 0}
   m_AnchorRotation: {x: 0, y: 0, z: -1, w: 0}
   m_MatchAnchors: 1

@@ -23,8 +23,8 @@ swings clear of what it closes against), centered along the hinge line.
 
 --carve NEW=SOURCE:X0,X1,Y0,Y1,Z0,Z1 (repeatable, applied first): a new part made of SOURCE's
   loose pieces that lie wholly inside this box (glTF frame: +Y up, front +Z, scene units), cut
-  out of SOURCE. For a part the multi-part model left fused into another: BANG drew four drawer
-  fronts on the filing cabinet but split out only three; the fourth is loose pieces of the carcass.
+  out of SOURCE. For a part the multi-part model left fused into another: the filing cabinet has
+  four drawer fronts, BANG split out three, and the fourth is loose pieces of the carcass.
   NEW can then be used in --root, --move or --slide like any other part.
 
 Writes assets/split/<name>/<name>_split.glb and <name>_joints.json. Runs in headless Blender.
