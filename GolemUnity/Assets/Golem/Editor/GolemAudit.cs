@@ -128,8 +128,11 @@ namespace Golem.EditorTools
                         "\"{0}\": {{\"now\": {1:F2}, \"target\": {2:F2}, \"limits\": [{3:F2}, {4:F2}], \"min\": {5:F2}, \"max\": {6:F2}, \"max_speed\": {7:F1} }}",
                         p.parts[i].name, value, d.target, d.lowerLimit, d.upperLimit, p.minValue[i], p.maxValue[i], p.maxSpeed[i]));
                 }
-                // Lowest point of the prop: below zero means it is sinking into, or through, the floor.
-                var lowest = p.root.GetComponentsInChildren<Renderer>().Min(r => r.bounds.min.y);
+                // Lowest vertex of the prop: below zero means it is sinking into, or through, the floor.
+                // (Not Renderer.bounds: that is the generated pose's box turned with the part, and a
+                // laptop screen turned 105 deg shut reported 4.8 cm below the floor while lying flat.)
+                var lowest = p.root.GetComponentsInChildren<MeshFilter>().Where(f => f.sharedMesh != null && f.sharedMesh.isReadable)
+                    .Min(f => f.sharedMesh.vertices.Min(v => f.transform.TransformPoint(v).y));
                 lines.Add(string.Format(Inv,
                     "\"{0}\": {{\"tilt\": {1:F2}, \"max_tilt\": {2:F2}, \"shift\": {3:F3}, \"max_shift\": {4:F3}, \"max_turn\": {5:F2}, \"lowest_y\": {6:F3}, \"parts\": {{{7}}}}}",
                     p.name, tilt, p.maxTilt, shift, p.maxShift, p.maxTurn, lowest, string.Join(", ", parts)));

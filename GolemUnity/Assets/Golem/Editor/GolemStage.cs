@@ -19,6 +19,11 @@ namespace Golem.EditorTools
         static readonly string[] Order = { "laptop", "toolbox", "chest", "filing_cabinet", "vault_door" };
         const float Gap = 0.6f;          // metres between props
         const float VerticalFov = 30f;   // a longer lens flattens perspective and reads as cinematic
+        const float Aspect = 16f / 9f;
+        const float CloseUpPitch = 20f;  // degrees the close-ups look down
+        const float CloseUpYaw = 30f;    // degrees the close-ups turn to one side, so slides and swings read in
+                                         // depth; each takes the side where its neighbours block less of it
+        const float CloseUpFill = 0.8f;  // fraction of the frame the prop's range of motion fills
 
         [MenuItem("GOLEM/Build Demo Stage")]
         public static void BuildMenu() => Build();
@@ -47,6 +52,7 @@ namespace Golem.EditorTools
             Lights();
             Frame(all);
             Ball(props);
+            Views(props);
 
             EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
             EditorSceneManager.SaveScene(SceneManager.GetActiveScene());
@@ -149,13 +155,14 @@ namespace Golem.EditorTools
             rb.mass = 30f;  // a heavy ball, so the difference between light and heavy props shows
             rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
 
-            // Same ball, same speed: it bounces off the 4.5 t vault door but knocks the 17 kg toolbox over.
-            // The first shot fires by itself shortly after Play; each can be repeated with its key.
+            // Same ball, same speed: it knocks the 17 kg toolbox onto its side and barely shifts the 61 kg
+            // cabinet. The vault door is anchored (a fixture), so its shot only shows the door holding.
+            // The first shot (the toolbox) fires by itself shortly after Play; each can be repeated with its key.
             var launcherObject = GameObject.Find("GOLEM Ball Launcher") ?? new GameObject("GOLEM Ball Launcher");
             var launcher = Ensure<GolemBallLauncher>(launcherObject);
             launcher.ball = rb;
             var shots = new List<GolemBallLauncher.Shot>();
-            foreach (var (name, key, side) in new[] { ("vault_door", "V", 1.4f), ("toolbox", "T", -1.2f), ("filing_cabinet", "B", -1.4f) })
+            foreach (var (name, key, side) in new[] { ("toolbox", "T", -1.2f), ("vault_door", "V", 1.4f), ("filing_cabinet", "B", -1.4f) })
             {
                 var target = props.FirstOrDefault(p => p.name == name + Suffix);
                 if (target == null)
@@ -166,6 +173,141 @@ namespace Golem.EditorTools
             launcher.shots = shots.ToArray();
             if (shots.Count > 0)
                 ball.transform.position = shots[0].spawn;
+        }
+
+        /// <summary>Camera presets on the main camera: view 0 is the wide shot just framed, then one
+        /// three-quarter close-up per prop in line order, fitted to everything the prop's parts sweep
+        /// through between their joint limits (a door swung open, drawers pulled out).</summary>
+        static void Views(List<Transform> props)
+        {
+            var cam = Camera.main;
+            if (cam == null)
+                return;
+            var rig = Ensure<GolemCameraRig>(cam.gameObject);
+            var views = new List<GolemCameraRig.View>
+            {
+                new GolemCameraRig.View { name = "wide", position = cam.transform.position, rotation = cam.transform.rotation },
+            };
+            var swept = props.Select(SweptCorners).ToList();
+            var boxes = swept.Select(corners =>
+            {
+                var box = new Bounds(corners[0], Vector3.zero);
+                foreach (var p in corners)
+                    box.Encapsulate(p);
+                return box;
+            }).ToList();
+            for (var i = 0; i < props.Count; i++)
+            {
+                var target = boxes[i];
+                var best = (blocked: int.MaxValue, position: Vector3.zero, rotation: Quaternion.identity);
+                var scores = new List<string>();
+                foreach (var yaw in new[] { CloseUpYaw, -CloseUpYaw })  // ties go to the first
+                {
+                    var rotation = Quaternion.Euler(CloseUpPitch, 180f + yaw, 0f);  // yaw 180 looks along -Z, at the fronts
+                    var position = target.center - rotation * Vector3.forward * FitDistance(swept[i], target.center, rotation);
+                    // Neighbours in the way count most. Then avoid a side hinge's own side: from there an
+                    // open door stands across its own doorway.
+                    var blocked = 10 * SightLinesBlocked(position, target, boxes.Where((_, j) => j != i))
+                                  + (Mathf.Sign(position.x - target.center.x) == HingeSide(props[i]) ? 1 : 0);
+                    scores.Add($"{(yaw > 0 ? "left" : "right")} {blocked}");
+                    if (blocked < best.blocked)
+                        best = (blocked, position, rotation);
+                }
+                Debug.Log($"[GOLEM] close-up {props[i].name.Replace(Suffix, "")}: {string.Join(", ", scores)} (10 per sight line through a neighbour, 1 for a side hinge's own side)");
+                views.Add(new GolemCameraRig.View { name = props[i].name.Replace(Suffix, ""), position = best.position, rotation = best.rotation });
+            }
+            rig.views = views.ToArray();
+        }
+
+        /// <summary>World X side (+1 or -1) of a hinge set off to one side of the prop's body, such as a
+        /// door's; 0 for hinges near the middle (lids hinge along the back) and for slides.</summary>
+        static float HingeSide(Transform prop)
+        {
+            var renderers = prop.GetComponentsInChildren<Renderer>()
+                .Where(r => r.GetComponentInParent<ArticulationBody>() is { isRoot: true }).ToArray();
+            if (renderers.Length == 0)
+                return 0;
+            var body = renderers[0].bounds;
+            foreach (var r in renderers)
+                body.Encapsulate(r.bounds);
+            foreach (var part in prop.GetComponentsInChildren<ArticulationBody>().Where(b => !b.isRoot && b.jointType == ArticulationJointType.RevoluteJoint))
+            {
+                var offset = part.transform.TransformPoint(part.anchorPosition).x - body.center.x;
+                if (Mathf.Abs(offset) > 0.5f * body.extents.x)
+                    return Mathf.Sign(offset);
+            }
+            return 0;
+        }
+
+        /// <summary>How many sight lines from the camera to the target's centre and corners pass
+        /// through another prop's swept bounds before reaching the target.</summary>
+        static int SightLinesBlocked(Vector3 camera, Bounds target, IEnumerable<Bounds> others)
+        {
+            var points = new List<Vector3> { target.center };
+            for (var i = 0; i < 8; i++)
+                points.Add(new Vector3((i & 1) == 0 ? target.min.x : target.max.x, (i & 2) == 0 ? target.min.y : target.max.y, (i & 4) == 0 ? target.min.z : target.max.z));
+            var otherList = others.ToList();
+            return points.Count(p =>
+            {
+                var ray = new Ray(camera, p - camera);
+                var reach = Vector3.Distance(camera, p);
+                return otherList.Any(b => b.IntersectRay(ray, out var hit) && hit < reach);
+            });
+        }
+
+        /// <summary>Corners of every part's bounds at several points across its joint's travel.</summary>
+        static List<Vector3> SweptCorners(Transform prop)
+        {
+            var corners = new List<Vector3>();
+            foreach (var renderer in prop.GetComponentsInChildren<Renderer>())
+            {
+                var body = renderer.GetComponentInParent<ArticulationBody>();
+                var b = renderer.bounds;
+                var box = new List<Vector3>();
+                for (var i = 0; i < 8; i++)
+                    box.Add(new Vector3((i & 1) == 0 ? b.min.x : b.max.x, (i & 2) == 0 ? b.min.y : b.max.y, (i & 4) == 0 ? b.min.z : b.max.z));
+                if (body == null || body.isRoot)
+                {
+                    corners.AddRange(box);
+                    continue;
+                }
+                // In the Editor every part sits at its generated pose, joint travel 0.
+                var drive = body.xDrive;
+                for (var k = 0; k <= 6; k++)
+                {
+                    var travel = Mathf.Lerp(drive.lowerLimit, drive.upperLimit, k / 6f);
+                    corners.AddRange(box.Select(p => GolemDragController.Moved(body, p, travel)));
+                }
+            }
+            return corners;
+        }
+
+        /// <summary>How far back along the view a camera must stand to fit every point in CloseUpFill of a 16:9 frame.</summary>
+        static float FitDistance(List<Vector3> points, Vector3 centre, Quaternion rotation)
+        {
+            var forward = rotation * Vector3.forward;
+            var right = rotation * Vector3.right;
+            var up = rotation * Vector3.up;
+            var tanV = Mathf.Tan(VerticalFov * 0.5f * Mathf.Deg2Rad) * CloseUpFill;
+            var tanH = Mathf.Tan(VerticalFov * 0.5f * Mathf.Deg2Rad) * Aspect * CloseUpFill;
+            var distance = 0f;
+            foreach (var p in points)
+            {
+                var q = p - centre;
+                var depth = Vector3.Dot(q, forward);  // a point beyond the centre is farther from the camera
+                distance = Mathf.Max(distance, Mathf.Abs(Vector3.Dot(q, right)) / tanH - depth, Mathf.Abs(Vector3.Dot(q, up)) / tanV - depth);
+            }
+            return distance;
+        }
+
+        /// <summary>For an agent: jump the main camera to preset view (0 = wide) without Play mode.</summary>
+        public static string ShowView(int index)
+        {
+            var cam = Camera.main;
+            if (cam == null || !cam.TryGetComponent(out GolemCameraRig rig) || index < 0 || index >= rig.views.Length)
+                return "no such view";
+            rig.Show(index, true);
+            return $"view {index}: {rig.views[index].name}";
         }
 
         /// <summary>Render the main camera straight into a PNG at the given size, with the camera's

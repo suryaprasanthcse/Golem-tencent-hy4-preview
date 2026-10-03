@@ -195,7 +195,7 @@ namespace Golem
 
         /// <summary>Where a point on the part goes for this much joint travel: along the anchor's X axis
         /// for a slide, around it for a hinge (the joint axis in Unity is the anchor's X).</summary>
-        static Vector3 Moved(ArticulationBody body, Vector3 point, float travel)
+        public static Vector3 Moved(ArticulationBody body, Vector3 point, float travel)
         {
             var axis = body.transform.rotation * body.anchorRotation * Vector3.right;
             if (body.jointType == ArticulationJointType.PrismaticJoint)
