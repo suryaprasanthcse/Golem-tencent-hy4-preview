@@ -1,0 +1,100 @@
+{
+  "measured_at": "2026-10-03T19:45:57+05:30",
+  "machine": "Intel64 Family 6 Model 140 Stepping 2, GenuineIntel, Windows 11",
+  "blender_startup_s": 2.4,
+  "unity": {
+    "import_and_articulate_ms": {
+      "chest": 651,
+      "filing_cabinet": 706,
+      "laptop": 665,
+      "toolbox": 672,
+      "vault_door": 777
+    },
+    "self_test_ms": 32,
+    "self_test_passed": true,
+    "stage_ms": 139,
+    "total_ms": 3896,
+    "fresh_import": true
+  },
+  "props": [
+    {
+      "name": "chest",
+      "hyper3d_jobs": [
+        "chest"
+      ],
+      "hyper3d_s": [
+        111.0
+      ],
+      "credits": 0.5,
+      "split_s": 4.53,
+      "unity_s": 0.65,
+      "golem_local_s": 5.18,
+      "golem_local_without_blender_startup_s": 2.78,
+      "total_s": 116.2
+    },
+    {
+      "name": "toolbox",
+      "hyper3d_jobs": [
+        "toolbox"
+      ],
+      "hyper3d_s": [
+        87.0
+      ],
+      "credits": 0.5,
+      "split_s": 4.29,
+      "unity_s": 0.67,
+      "golem_local_s": 4.96,
+      "golem_local_without_blender_startup_s": 2.56,
+      "total_s": 92.0
+    },
+    {
+      "name": "laptop",
+      "hyper3d_jobs": [
+        "laptop"
+      ],
+      "hyper3d_s": [
+        125.0
+      ],
+      "credits": 0.5,
+      "split_s": 4.75,
+      "unity_s": 0.67,
+      "golem_local_s": 5.42,
+      "golem_local_without_blender_startup_s": 3.02,
+      "total_s": 130.4
+    },
+    {
+      "name": "vault_door",
+      "hyper3d_jobs": [
+        "vault_door",
+        "vault_door_bang"
+      ],
+      "hyper3d_s": [
+        217.0,
+        311.0
+      ],
+      "credits": 1.0,
+      "split_s": 4.05,
+      "unity_s": 0.78,
+      "golem_local_s": 4.83,
+      "golem_local_without_blender_startup_s": 2.43,
+      "total_s": 532.8
+    },
+    {
+      "name": "filing_cabinet",
+      "hyper3d_jobs": [
+        "filing_cabinet",
+        "filing_cabinet_bang"
+      ],
+      "hyper3d_s": [
+        85.0,
+        283.0
+      ],
+      "credits": 1.0,
+      "split_s": 4.23,
+      "unity_s": 0.71,
+      "golem_local_s": 4.94,
+      "golem_local_without_blender_startup_s": 2.54,
+      "total_s": 372.9
+    }
+  ]
+}

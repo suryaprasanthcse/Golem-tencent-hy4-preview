@@ -66,6 +66,50 @@ namespace Golem.EditorTools
         /// <summary>For an agent: import every prop, self-test, then build the demo stage.</summary>
         public static string RebuildAll() => ImportAndTest() + "; " + GolemStage.Build();
 
+        /// <summary>
+        /// For metrics: rebuild everything and time each stage. With fresh, each prop's imported
+        /// model is deleted first, so its time includes the full glTFast import a new asset needs.
+        /// Returns JSON: per-prop import+articulation ms, then self-test and stage ms.
+        /// </summary>
+        public static string TimedRebuild(bool fresh)
+        {
+            var timings = new System.Collections.Generic.List<string>();
+            var total = System.Diagnostics.Stopwatch.StartNew();
+            var index = 0;
+            foreach (var dir in Directory.GetDirectories(SplitRoot).OrderBy(d => d))
+            {
+                var name = Path.GetFileName(dir);
+                var glb = Path.Combine(dir, $"{name}_split.glb");
+                var json = Path.Combine(dir, $"{name}_joints.json");
+                if (!File.Exists(glb) || !File.Exists(json))
+                    continue;
+                var old = GameObject.Find(name + Suffix);
+                if (old != null)
+                    Object.DestroyImmediate(old);  // before any asset deletion, see ImportProp
+                if (fresh)
+                    AssetDatabase.DeleteAsset($"{PropsFolder}/{name}");
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                ImportProp(name, glb, json, new Vector3(index++ * Spacing, 0, 0));
+                timings.Add($"\"{name}\": {watch.ElapsedMilliseconds}");
+            }
+            EnsureStage();
+            var test = System.Diagnostics.Stopwatch.StartNew();
+            var passed = SelfTest();
+            var testMs = test.ElapsedMilliseconds;
+            var stage = System.Diagnostics.Stopwatch.StartNew();
+            GolemStage.Build();
+            var report = "{\"import_and_articulate_ms\": {" + string.Join(", ", timings) + "}, " +
+                         $"\"self_test_ms\": {testMs}, \"self_test_passed\": {(passed ? "true" : "false")}, " +
+                         $"\"stage_ms\": {stage.ElapsedMilliseconds}, \"total_ms\": {total.ElapsedMilliseconds}, \"fresh_import\": {(fresh ? "true" : "false")}}}";
+            // Also written to a file: fresh imports outlast the Pipeline server's 5 s main-thread wait,
+            // so a caller may never receive the return value.
+            File.WriteAllText(TimingPath, report);
+            Debug.Log($"[GOLEM] TIMING {report}");
+            return report;
+        }
+
+        public static string TimingPath => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "assets", "unity_timing.json"));
+
         public static void BuildFromCommandLine()
         {
             EditorSceneManager.OpenScene(ScenePath);

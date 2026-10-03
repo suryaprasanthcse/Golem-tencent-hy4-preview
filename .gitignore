@@ -33,3 +33,6 @@ GolemUnity/Assets/GolemProps.meta
 # OS
 .DS_Store
 Thumbs.db
+
+# Written by the Editor during a timed rebuild
+assets/unity_timing.json
