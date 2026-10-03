@@ -18,8 +18,10 @@ namespace Golem
         public static Vector3 GltfRotationAxis(float[] a) => new Vector3(a[0], -a[1], -a[2]);
 
         /// <param name="root">The instantiated glTF scene root; the spec's frame is its local frame.</param>
-        public static void Build(Transform root, GolemSpec spec)
+        /// <param name="density">kg/m3, for part masses (volume estimated from the part's bounds).</param>
+        public static void Build(Transform root, GolemSpec spec, float density = 500f)
         {
+            var scale = root.lossyScale.x;  // props are scaled uniformly to real-world size
             var partNames = spec.joints.SelectMany(j => new[] { j.parent, j.child }).ToHashSet();
             var childNames = spec.joints.Select(j => j.child).ToHashSet();
             foreach (var joint in spec.joints)
@@ -40,7 +42,8 @@ namespace Golem
                 if (parentBody.isRoot)
                     parentBody.immovable = true;  // the body stays put; its parts move
                 var childBody = EnsureBody(child, partNames);
-                childBody.mass = 1f;
+                childBody.mass = EstimateMass(child, partNames, density);
+                parentBody.mass = EstimateMass(parent, partNames, density);
 
                 var pivotWorld = root.TransformPoint(GltfPoint(joint.pivot));
                 if (joint.type == "prismatic")
@@ -59,13 +62,16 @@ namespace Golem
                 }
 
                 var drive = childBody.xDrive;
-                drive.lowerLimit = joint.limits_deg[0];
-                drive.upperLimit = joint.limits_deg[1];
-                drive.stiffness = 400f;
-                drive.damping = 40f;
+                // Slide limits are in scene units, so they scale with the prop; hinge limits are degrees.
+                var unit = joint.type == "prismatic" ? scale : 1f;
+                drive.lowerLimit = joint.limits_deg[0] * unit;
+                drive.upperLimit = joint.limits_deg[1] * unit;
+                // Motor strength grows with the part's mass, so heavy doors move like light lids.
+                drive.stiffness = Mathf.Max(400f, 40f * childBody.mass);
+                drive.damping = Mathf.Max(40f, 4f * childBody.mass);
                 drive.forceLimit = float.MaxValue;
                 // Start as generated: closed for a lid, standing open for a laptop screen.
-                drive.target = Mathf.Clamp(joint.rest_deg, joint.limits_deg[0], joint.limits_deg[1]);
+                drive.target = Mathf.Clamp(joint.rest_deg * unit, drive.lowerLimit, drive.upperLimit);
                 childBody.xDrive = drive;
 
                 var link = child.TryGetComponent(out GolemJointLink existing) ? existing : child.gameObject.AddComponent<GolemJointLink>();
@@ -99,6 +105,19 @@ namespace Golem
             }
             // TryGetComponent, not "??": the Editor's fake-null objects would fool the ?? operator.
             return part.TryGetComponent(out ArticulationBody body) ? body : part.gameObject.AddComponent<ArticulationBody>();
+        }
+
+        /// <summary>density x volume, with the volume taken as half the part's world bounding box
+        /// (generated parts are solid shells; a box overestimates, the fill factor compensates).</summary>
+        static float EstimateMass(Transform part, System.Collections.Generic.HashSet<string> partNames, float density)
+        {
+            var renderers = OwnMeshes(part, partNames).Select(f => f.GetComponent<Renderer>()).Where(r => r != null).ToArray();
+            if (renderers.Length == 0)
+                return 1f;
+            var b = renderers[0].bounds;
+            foreach (var r in renderers)
+                b.Encapsulate(r.bounds);
+            return Mathf.Max(0.1f, 0.5f * b.size.x * b.size.y * b.size.z * density);
         }
 
         static System.Collections.Generic.IEnumerable<MeshFilter> OwnMeshes(Transform node, System.Collections.Generic.HashSet<string> partNames)

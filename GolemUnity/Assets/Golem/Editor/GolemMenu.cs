@@ -22,6 +22,21 @@ namespace Golem.EditorTools
         const float Spacing = 3.5f;
 
         static string SplitRoot => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "assets", "split"));
+        static string SizesPath => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "golem_sizes.json"));
+
+        [System.Serializable] class PropSize { public string name; public float size_m; public float density; }
+        [System.Serializable] class SizeTable { public PropSize[] props; }
+
+        static PropSize SizeFor(string name)
+        {
+            if (!File.Exists(SizesPath))
+                return null;
+            var table = JsonUtility.FromJson<SizeTable>(File.ReadAllText(SizesPath));
+            var entry = table.props?.FirstOrDefault(p => p.name == name);
+            if (entry == null)
+                Debug.LogWarning($"[GOLEM] {name}: no entry in golem_sizes.json, keeping generated size");
+            return entry;
+        }
 
         [MenuItem("GOLEM/Import Split Props")]
         public static void ImportSplitPropsMenu()
@@ -108,12 +123,21 @@ namespace Golem.EditorTools
             PrefabUtility.UnpackPrefabInstance(instance, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
             instance.transform.SetParent(wrapper, false);
 
+            // Real-world size: generated meshes arrive ~2 units across; scale uniformly to size_m.
+            var size = SizeFor(name);
             var renderers = instance.GetComponentsInChildren<Renderer>();
+            if (size != null && renderers.Length > 0)
+            {
+                var b = renderers[0].bounds;
+                foreach (var r in renderers)
+                    b.Encapsulate(r.bounds);
+                wrapper.localScale = Vector3.one * (size.size_m / Mathf.Max(b.size.x, b.size.y, b.size.z));
+            }
             if (renderers.Length > 0)  // stand the prop on the ground
                 wrapper.position += Vector3.up * -renderers.Min(r => r.bounds.min.y);
 
             var spec = JsonUtility.FromJson<GolemSpec>(File.ReadAllText(json));
-            GolemArticulator.Build(wrapper, spec);
+            GolemArticulator.Build(wrapper, spec, size != null ? size.density : 500f);
             Debug.Log($"[GOLEM] {name}: {spec.joints.Length} joint(s) built");
             return true;
         }
