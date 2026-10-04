@@ -2,7 +2,7 @@
 
 **Every AI-generated 3D asset is a statue. GOLEM makes it move.**
 
-Text-to-3D can give you a treasure chest in two minutes, but the lid is welded shut: one solid mesh, no parts, no pivots, no mass. In a game that's scenery, not a prop. GOLEM turns that statue into a mechanically interactive, physics-ready game entity. Lids swing on their real hinge line, doors open, drawers slide, and every part carries a mass computed from its own geometry. The same 30 kg ball that tips a 17 kg toolbox onto its side moves a 59 kg filing cabinet 4 cm.
+Text-to-3D can give you a treasure chest in two minutes, but the lid is welded shut: one solid mesh, no parts, no pivots, no mass. In a game that's scenery, not a prop. GOLEM turns that statue into a mechanically interactive, physics-ready game entity. Lids swing on their real hinge line, doors open, drawers slide, and every part carries a mass computed from its own geometry. The same 30 kg ball that tips a 17 kg toolbox onto its side only shakes a 66 kg filing cabinet: it rocks 0.9° and slides 3.6 cm.
 
 **Hyper3D generates it in about 2 minutes. GOLEM makes it interactive in under 5 seconds per asset.**
 
@@ -142,7 +142,7 @@ Interactive props are only useful if they don't fall over when you use them. The
 - **Parts move at a speed their mass allows.** Opening and closing follow a smooth speed profile whose top speed falls with 1/√mass: a 0.9 kg laptop screen swings shut in 1.2 s, the 2.8 t vault door takes 4.0 s. Before, every part covered 90% of its travel in a quarter of a second whatever it weighed, and the motor's kick threw the props over.
 - **Inertia-scaled drives.** Every joint drive is critically damped at 10 Hz, scaled by that joint's own inertia, so a 0.9 kg screen and a 2.8 t door track their targets equally well.
 - **Flat footprints.** Generated bases are not flat (the chest's varies by 2 cm), so a prop resting on its convex hull rocked from facet to facet as its weight shifted. Each body now stands on a flat footprint at its lowest point.
-- **Fixtures are anchored.** The vault's 2.8 t door outweighs its 1.7 t frame; like a real vault door, it is set in place.
+- **Fixtures are anchored.** The vault's 2.8 t door outweighs its 1.7 t frame; like a real vault door, it is set in a wall. The stage builds one behind every anchored prop, with a round doorway hidden behind the frame and a dark vault behind that.
 - **Dragging never reverses.** The mouse-to-joint mapping is fixed when you grab a part. Tested with 37 scripted drags from four camera angles: every one moved the right way, with no reversals.
 
 ![Vault door close-up, swung open](docs/vault_open.png)
@@ -229,7 +229,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 | O / C | Open / close every part |
 | 0 | Wide shot |
 | 1 – 5 | Close-up: laptop, toolbox, chest, filing cabinet, vault door |
-| T / V / B | Roll the 30 kg ball at the toolbox / vault door / filing cabinet (the toolbox shot fires by itself 1.5 s after Play) |
+| B / T / V | Roll the 30 kg ball at the filing cabinet / toolbox / vault door (the cabinet shot fires by itself 1.5 s after Play) |
 
 **Re-measure:** `python golem_metrics.py` with the Unity project open regenerates `METRICS.md`. **GOLEM → Run Hinge Self-Test** checks every joint.
 

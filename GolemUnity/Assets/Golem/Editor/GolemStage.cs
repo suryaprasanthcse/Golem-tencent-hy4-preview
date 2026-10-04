@@ -24,6 +24,17 @@ namespace Golem.EditorTools
         const float CloseUpYaw = 30f;    // degrees the close-ups turn to one side, so slides and swings read in
                                          // depth; each takes the side where its neighbours block less of it
         const float CloseUpFill = 0.8f;  // fraction of the frame the prop's range of motion fills
+        // Walls behind anchored props (FixtureWalls), in metres unless noted.
+        const string WallPrefix = "GOLEM Wall ";
+        const float WallThickness = 0.3f;
+        const float WallBeyond = 0.6f;     // past the frame's sides
+        const float WallAbove = 0.9f;      // above the frame's top
+        const float WallClearance = 0.3f;  // gap left to a neighbouring prop
+        const float WallEmbed = 0.02f;     // the wall's face sits this far inside the frame's back, so no seam shows
+        const float DoorwayFill = 0.9f;    // rectangular doorway size, as a fraction of the moving parts' outline
+        const float RoundTolerance = 0.15f; // a door whose width and height differ less than this is round
+        const int RoundStrips = 96;        // horizontal strips that step a round doorway: at 24 the steps showed as stairs through the frame
+        const float RecessWall = 0.1f;
 
         [MenuItem("GOLEM/Build Demo Stage")]
         public static void BuildMenu() => Build();
@@ -49,6 +60,7 @@ namespace Golem.EditorTools
             var surface = Material(new Color(0.16f, 0.16f, 0.17f), 0.25f);
             Floor(surface);
             Backdrop(Material(new Color(0.11f, 0.11f, 0.12f), 0.1f), all);
+            FixtureWalls(props);
             Lights();
             Frame(all);
             Ball(props);
@@ -109,6 +121,115 @@ namespace Golem.EditorTools
             wall.GetComponent<Renderer>().sharedMaterial = material;
         }
 
+        /// <summary>
+        /// A concrete wall behind every anchored prop (golem_sizes.json "anchored"). The prop's body is
+        /// immovable either way; the wall shows why, so a 4.5 t vault that never falls reads as built in
+        /// rather than as a statue ignoring physics. The doorway follows the moving parts' outline (round
+        /// for a round door) and hides behind the frame's rim, with a dark recess behind it, so the opened
+        /// door shows a vault rather than bare wall. The wall stops WallClearance short of neighbouring props.
+        /// Static box colliders; rebuilt on every stage build.
+        /// </summary>
+        static void FixtureWalls(List<Transform> props)
+        {
+            foreach (var old in Object.FindObjectsByType<Transform>(FindObjectsSortMode.None).Where(t => t.parent == null && t.name.StartsWith(WallPrefix)).ToArray())
+                Object.DestroyImmediate(old.gameObject);
+            var concrete = Material(new Color(0.34f, 0.34f, 0.35f), 0.08f);
+            var dark = Material(new Color(0.03f, 0.03f, 0.035f), 0.05f);
+            foreach (var prop in props)
+            {
+                var name = prop.name.Replace(Suffix, "");
+                if (GolemMenu.SizeFor(name)?.anchored != true)
+                    continue;
+                var frame = PartBounds(prop, root: true);
+                var moving = PartBounds(prop, root: false);
+                if (frame.size == Vector3.zero || moving.size == Vector3.zero)
+                    continue;
+
+                // Props face +Z, so the wall goes behind the frame's back face.
+                var front = frame.min.z + WallEmbed;
+                var back = front - WallThickness;
+                var left = frame.min.x - WallBeyond;
+                var right = frame.max.x + WallBeyond;
+                foreach (var other in props.Where(p => p != prop).Select(p => BoundsOf(new[] { p })))
+                {
+                    if (other.max.z < back || other.min.z > front)
+                        continue;  // not level with the wall
+                    if (other.min.x >= frame.max.x)
+                        right = Mathf.Min(right, other.min.x - WallClearance);
+                    else if (other.max.x <= frame.min.x)
+                        left = Mathf.Max(left, other.max.x + WallClearance);
+                }
+                var top = frame.max.y + WallAbove;
+                var c = moving.center;
+                // A round door (a vault's) gets a round doorway; a square one would poke its corners out
+                // past the frame's rim. Otherwise a rectangle at DoorwayFill of the door's outline.
+                var round = Mathf.Abs(moving.extents.x - moving.extents.y) < RoundTolerance * Mathf.Max(moving.extents.x, moving.extents.y);
+                var radius = Mathf.Max(moving.extents.x, moving.extents.y);
+                var hx = round ? radius : DoorwayFill * moving.extents.x;
+                var hy = round ? radius : DoorwayFill * moving.extents.y;
+
+                var wall = new GameObject(WallPrefix + name).transform;
+                void Slab(string part, Vector3 min, Vector3 max, Material material)
+                {
+                    if (max.x - min.x <= 0f || max.y - min.y <= 0f || max.z - min.z <= 0f)
+                        return;
+                    var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    cube.name = part;
+                    cube.transform.SetParent(wall, false);
+                    cube.transform.position = (min + max) / 2;
+                    cube.transform.localScale = max - min;
+                    cube.GetComponent<Renderer>().sharedMaterial = material;
+                }
+                // The wall, around the doorway.
+                if (round)
+                {
+                    Slab("below", new Vector3(left, 0, back), new Vector3(right, c.y - radius, front), concrete);
+                    Slab("above", new Vector3(left, c.y + radius, back), new Vector3(right, top, front), concrete);
+                    // Strip by strip, each strip open as wide as the circle gets within it: the stepped edge
+                    // never narrows the doorway, and stays behind the frame's rim (for the vault, within
+                    // 0.86 m of the centre against a 0.75 m opening and a 1.1 m rim).
+                    var strip = 2 * radius / RoundStrips;
+                    for (var i = 0; i < RoundStrips; i++)
+                    {
+                        var y0 = c.y - radius + i * strip;
+                        var y1 = y0 + strip;
+                        var nearest = y0 <= c.y && c.y <= y1 ? 0f : Mathf.Min(Mathf.Abs(y0 - c.y), Mathf.Abs(y1 - c.y));
+                        var half = Mathf.Sqrt(radius * radius - nearest * nearest);
+                        Slab($"left {i}", new Vector3(left, y0, back), new Vector3(c.x - half, y1, front), concrete);
+                        Slab($"right {i}", new Vector3(c.x + half, y0, back), new Vector3(right, y1, front), concrete);
+                    }
+                }
+                else
+                {
+                    Slab("left", new Vector3(left, 0, back), new Vector3(c.x - hx, top, front), concrete);
+                    Slab("right", new Vector3(c.x + hx, 0, back), new Vector3(right, top, front), concrete);
+                    Slab("below", new Vector3(c.x - hx, 0, back), new Vector3(c.x + hx, c.y - hy, front), concrete);
+                    Slab("above", new Vector3(c.x - hx, c.y + hy, back), new Vector3(c.x + hx, top, front), concrete);
+                }
+                // The recess behind the doorway, as deep as the doorway is tall.
+                var depth = 2 * hy;
+                var t = RecessWall;
+                Slab("recess back", new Vector3(c.x - hx - t, c.y - hy - t, back - depth - t), new Vector3(c.x + hx + t, c.y + hy + t, back - depth), dark);
+                Slab("recess left", new Vector3(c.x - hx - t, c.y - hy, back - depth), new Vector3(c.x - hx, c.y + hy, back), dark);
+                Slab("recess right", new Vector3(c.x + hx, c.y - hy, back - depth), new Vector3(c.x + hx + t, c.y + hy, back), dark);
+                Slab("recess floor", new Vector3(c.x - hx - t, c.y - hy - t, back - depth), new Vector3(c.x + hx + t, c.y - hy, back), dark);
+                Slab("recess ceiling", new Vector3(c.x - hx - t, c.y + hy, back - depth), new Vector3(c.x + hx + t, c.y + hy + t, back), dark);
+            }
+        }
+
+        /// <summary>Renderer bounds of a prop's root body, or of its moving parts.</summary>
+        static Bounds PartBounds(Transform prop, bool root)
+        {
+            var renderers = prop.GetComponentsInChildren<Renderer>()
+                .Where(r => r.GetComponentInParent<ArticulationBody>() is { } body && body.isRoot == root).ToArray();
+            if (renderers.Length == 0)
+                return new Bounds();
+            var b = renderers[0].bounds;
+            foreach (var r in renderers)
+                b.Encapsulate(r.bounds);
+            return b;
+        }
+
         static void Lights()
         {
             var key = Object.FindObjectsByType<Light>(FindObjectsSortMode.None).FirstOrDefault(l => l.type == LightType.Directional && l.name != "GOLEM Fill");
@@ -155,14 +276,14 @@ namespace Golem.EditorTools
             rb.mass = 30f;  // a heavy ball, so the difference between light and heavy props shows
             rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
 
-            // Same ball, same speed: it knocks the 17 kg toolbox onto its side and barely shifts the 61 kg
-            // cabinet. The vault door is anchored (a fixture), so its shot only shows the door holding.
-            // The first shot (the toolbox) fires by itself shortly after Play; each can be repeated with its key.
+            // Same ball, same speed: it shakes the heavy filing cabinet and knocks the 17 kg toolbox onto its
+            // side. The vault door is anchored (a fixture), so its shot only shows the door holding.
+            // The first shot (the cabinet) fires by itself shortly after Play; each can be repeated with its key.
             var launcherObject = GameObject.Find("GOLEM Ball Launcher") ?? new GameObject("GOLEM Ball Launcher");
             var launcher = Ensure<GolemBallLauncher>(launcherObject);
             launcher.ball = rb;
             var shots = new List<GolemBallLauncher.Shot>();
-            foreach (var (name, key, side) in new[] { ("toolbox", "T", -1.2f), ("vault_door", "V", 1.4f), ("filing_cabinet", "B", -1.4f) })
+            foreach (var (name, key, side) in new[] { ("filing_cabinet", "B", -1.4f), ("toolbox", "T", -1.2f), ("vault_door", "V", 1.4f) })
             {
                 var target = props.FirstOrDefault(p => p.name == name + Suffix);
                 if (target == null)
