@@ -12,7 +12,7 @@ Text-to-3D can give you a treasure chest in two minutes, but the lid is welded s
 
 Built for the Cambridge × Arcade AI Hackathon, Game Tech track (Tencent Cloud × Hyper3D), 3–4 October 2026.
 
-**Demo video:** [Google Drive](https://drive.google.com/drive/folders/1UXWH4ZhJozBS6qF-oj2g-jajAXVVKijr?usp=sharing) · **Repository:** [GitHub](https://github.com/suryaprasanthcse/Golem_Arcade_Game_tech) · **Models:** [`assets_release.zip` (release v1.0-hackathon)](https://github.com/suryaprasanthcse/Golem_Arcade_Game_tech/releases/tag/v1.0-hackathon)
+**Play in the browser:** [suryaprasanthcse.github.io/Golem_Arcade_Game_tech](https://suryaprasanthcse.github.io/Golem_Arcade_Game_tech/) (WebGL, 24 MB; drag a lid, door or drawer, O opens everything) · **Demo video:** [Google Drive](https://drive.google.com/drive/folders/1UXWH4ZhJozBS6qF-oj2g-jajAXVVKijr?usp=sharing) · **Repository:** [GitHub](https://github.com/suryaprasanthcse/Golem_Arcade_Game_tech) · **Models:** [`assets_release.zip` (release v1.0-hackathon)](https://github.com/suryaprasanthcse/Golem_Arcade_Game_tech/releases/tag/v1.0-hackathon)
 
 ---
 
