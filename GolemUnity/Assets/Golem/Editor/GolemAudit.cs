@@ -178,22 +178,7 @@ namespace Golem.EditorTools
             if (dragger == null || dragPart == null)
                 return $"no drag controller, or no moving part {prop}/{part}";
 
-            // Candidate grab points: a grid over the part's bounds, kept where the camera ray hits this part.
-            var bounds = dragPart.GetComponentsInChildren<Renderer>().Select(r => r.bounds).Aggregate((a, b) => { a.Encapsulate(b); return a; });
-            var pivot = dragPart.transform.TransformPoint(dragPart.anchorPosition);
-            var best = (score: -1f, screen: Vector2.zero, point: Vector3.zero);
-            for (var i = 0; i <= 8; i++)
-                for (var j = 0; j <= 8; j++)
-                    for (var k = 0; k <= 8; k++)
-                    {
-                        var p = bounds.min + Vector3.Scale(bounds.size, new Vector3(i, j, k) / 8f);
-                        var screen = (Vector2)cam.WorldToScreenPoint(p);
-                        if (!Physics.Raycast(cam.ScreenPointToRay(screen), out var hit) || hit.collider.attachedArticulationBody != dragPart)
-                            continue;
-                        var score = dragPart.jointType == ArticulationJointType.PrismaticJoint ? 1f : Vector3.Distance(hit.point, pivot);
-                        if (score > best.score)
-                            best = (score, screen, hit.point);
-                    }
+            var best = BestGrab(cam, dragPart);
             if (best.score < 0)
                 return $"{prop}/{part} is not visible from the camera";
             if (!dragger.Grab(best.screen) || dragger.HeldPart != dragPart)
@@ -211,6 +196,41 @@ namespace Golem.EditorTools
             var range = dragPart.xDrive.upperLimit - dragPart.xDrive.lowerLimit;
             return string.Format(Inv, "grabbed {0}/{1} at ({2:F0}, {3:F0}) px, joint {4:F2}, full travel = {5:F0} px of drag",
                 prop, part, dragFrom.x, dragFrom.y, Joint(dragPart).value, dragger.DragPerUnitOnScreen.magnitude * range);
+        }
+
+        /// <summary>The visible point of a part farthest from its joint (any visible point of a slide):
+        /// where a scripted drag grabs it. Candidates are a grid over the part's bounds, kept where the
+        /// camera's ray hits this part.</summary>
+        static (float score, Vector2 screen, Vector3 point) BestGrab(Camera cam, ArticulationBody part)
+        {
+            var bounds = part.GetComponentsInChildren<Renderer>().Select(r => r.bounds).Aggregate((a, b) => { a.Encapsulate(b); return a; });
+            var pivot = part.transform.TransformPoint(part.anchorPosition);
+            var best = (score: -1f, screen: Vector2.zero, point: Vector3.zero);
+            for (var i = 0; i <= 8; i++)
+                for (var j = 0; j <= 8; j++)
+                    for (var k = 0; k <= 8; k++)
+                    {
+                        var p = bounds.min + Vector3.Scale(bounds.size, new Vector3(i, j, k) / 8f);
+                        var screen = (Vector2)cam.WorldToScreenPoint(p);
+                        if (!Physics.Raycast(cam.ScreenPointToRay(screen), out var hit) || hit.collider.attachedArticulationBody != part)
+                            continue;
+                        var score = part.jointType == ArticulationJointType.PrismaticJoint ? 1f : Vector3.Distance(hit.point, pivot);
+                        if (score > best.score)
+                            best = (score, screen, hit.point);
+                    }
+            return best;
+        }
+
+        /// <summary>Where Drag would grab this part on screen, or null if it isn't visible.</summary>
+        public static Vector2? GrabPoint(string prop, string part)
+        {
+            var cam = Camera.main;
+            var wrapper = GameObject.Find(prop + Suffix);
+            var body = wrapper != null ? wrapper.GetComponentsInChildren<ArticulationBody>().FirstOrDefault(b => b.name == part && !b.isRoot) : null;
+            if (cam == null || body == null)
+                return null;
+            var best = BestGrab(cam, body);
+            return best.score < 0 ? (Vector2?)null : best.screen;
         }
 
         /// <summary>Like Drag, but asks for joint travel (degrees, or metres for a slide): the pointer
@@ -233,11 +253,13 @@ namespace Golem.EditorTools
             var t = (Time.time - dragStart) / dragSeconds;
             var cursor = dragFrom + dragBy * Mathf.Clamp01(t);
             dragger.DragTo(cursor);
+            GolemCursorOverlay.Place(cursor, held: true);  // recordings show this cursor; scripts move no real one
             dragValues.Add(Joint(dragPart).value);
             if (t < 1f + 1f / dragSeconds)  // the drag, then a second's hold
                 return;
 
             dragger.Release();
+            GolemCursorOverlay.Place(cursor, held: false);
             EditorApplication.update -= StepDrag;
             var cam = Camera.main;
             var miss = Vector2.Distance(cam.WorldToScreenPoint(dragPart.transform.TransformPoint(dragLocal)), cursor);
