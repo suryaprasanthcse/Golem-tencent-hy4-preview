@@ -321,21 +321,29 @@ namespace Golem.EditorTools
             for (var i = 0; i < props.Count; i++)
             {
                 var target = boxes[i];
+                var hingeSide = HingeSide(props[i]);
+                // A door hung from hinge hardware (golem_assemble.py --hinge-arms) is shown from its hinge
+                // side, or the open door hides the arm that holds it; other side hinges from the far side.
+                var hardware = props[i].GetComponentsInChildren<Transform>().Any(t => t.name.StartsWith("golem_hinge"));
+                var preferred = hardware ? hingeSide : -hingeSide;
+                // Showing the hardware outweighs one sight line grazing a neighbour's swept box (the vault's
+                // hinge side grazed the cabinet's pulled-out drawers), not two.
+                var sideWeight = hardware ? 15 : 1;
                 var best = (blocked: int.MaxValue, position: Vector3.zero, rotation: Quaternion.identity);
                 var scores = new List<string>();
                 foreach (var yaw in new[] { CloseUpYaw, -CloseUpYaw })  // ties go to the first
                 {
                     var rotation = Quaternion.Euler(CloseUpPitch, 180f + yaw, 0f);  // yaw 180 looks along -Z, at the fronts
                     var position = target.center - rotation * Vector3.forward * FitDistance(swept[i], target.center, rotation);
-                    // Neighbours in the way count most. Then avoid a side hinge's own side: from there an
-                    // open door stands across its own doorway.
+                    // Neighbours in the way count most. Then a side hinge's preferred side: the far side, as
+                    // from the hinge side an open door stands across its own doorway, unless it has hinge hardware.
                     var blocked = 10 * SightLinesBlocked(position, target, boxes.Where((_, j) => j != i))
-                                  + (Mathf.Sign(position.x - target.center.x) == HingeSide(props[i]) ? 1 : 0);
+                                  + (hingeSide != 0 && Mathf.Sign(position.x - target.center.x) != preferred ? sideWeight : 0);
                     scores.Add($"{(yaw > 0 ? "left" : "right")} {blocked}");
                     if (blocked < best.blocked)
                         best = (blocked, position, rotation);
                 }
-                Debug.Log($"[GOLEM] close-up {props[i].name.Replace(Suffix, "")}: {string.Join(", ", scores)} (10 per sight line through a neighbour, 1 for a side hinge's own side)");
+                Debug.Log($"[GOLEM] close-up {props[i].name.Replace(Suffix, "")}: {string.Join(", ", scores)} (10 per sight line through a neighbour; a side hinge's less useful side 1, or 15 with hinge hardware)");
                 views.Add(new GolemCameraRig.View { name = props[i].name.Replace(Suffix, ""), position = best.position, rotation = best.rotation });
             }
             rig.views = views.ToArray();
