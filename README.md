@@ -32,13 +32,13 @@ Measured on a laptop (i5-11320H, 24 GB RAM), from [`METRICS.md`](METRICS.md):
 
 | Prop | Hyper3D cloud (generate + BANG) | GOLEM split | GOLEM Unity (import + joints) | **GOLEM total** | End to end | Credits |
 |---|---|---|---|---|---|---|
-| Chest | 111 s | 3.9 s | 0.72 s | **4.6 s** | 116 s | 0.5 |
-| Toolbox | 87 s | 3.8 s | 0.54 s | **4.4 s** | 91 s | 0.5 |
-| Laptop | 125 s | 4.2 s | 0.55 s | **4.8 s** | 130 s | 0.5 |
-| Vault door | 217 s + 311 s | 3.6 s | 0.69 s | **4.2 s** | 532 s | 1.0 |
-| Filing cabinet | 85 s + 283 s | 3.6 s | 0.65 s | **4.3 s** | 372 s | 1.0 |
+| Chest | 111 s | 4.3 s | 0.56 s | **4.9 s** | 116 s | 0.5 |
+| Toolbox | 87 s | 4.1 s | 0.53 s | **4.6 s** | 92 s | 0.5 |
+| Laptop | 125 s | 4.3 s | 0.54 s | **4.8 s** | 130 s | 0.5 |
+| Vault door | 217 s + 311 s | 3.4 s | 0.69 s | **4.1 s** | 532 s | 1.0 |
+| Filing cabinet | 85 s + 283 s | 4.0 s | 0.64 s | **4.6 s** | 373 s | 1.0 |
 
-- **GOLEM's own work: 4.2–4.8 s per prop**, of which 2.0 s is Blender starting up (a batch run pays that once).
+- **GOLEM's own work: 4.1–4.9 s per prop**, of which 2.1 s is Blender starting up (a batch run pays that once).
 - **Hyper3D: 85–125 s per Rodin generation, 283–311 s per BANG split, 0.5 credits per job** (measured from the wallet), through Hyper3D's official CLI.
 - Unity imports were timed fresh (cached models deleted first), as for a newly generated asset. Cloud times come from each job's own record and include queueing and download.
 
@@ -49,7 +49,7 @@ Measured on a laptop (i5-11320H, 24 GB RAM), from [`METRICS.md`](METRICS.md):
 | Laptop | Rodin Gen-2.5 (came out open, though prompted closed) | Cutter, `--open-part`: the screen stands at 107° | 1 hinge, −105° to +28° | 0.36 m | 3.0 + 0.9 kg |
 | Toolbox | Rodin Gen-2.5 | Cutter: seam found automatically at the lid rim | 1 hinge, 0–110° | 0.55 m | 11.9 + 5.0 kg |
 | Chest | Rodin Gen-2.5 | Cutter: seam found automatically in the groove | 1 hinge, 0–110° | 0.90 m | 30.0 + 15.7 kg |
-| Filing cabinet | Rodin Gen-2.5 + BANG (9 parts) | Assembler: artist names body and fronts; the fourth front is carved out of the carcass | 4 sliders, 0–0.49 m | 1.30 m | 56.5 + 4 drawers of 0.4–1.0 kg |
+| Filing cabinet | Rodin Gen-2.5 + BANG (9 parts) | Assembler: artist names body and fronts; the fourth front is carved out of the carcass; drawer boxes are built behind the fronts | 4 sliders, 0–0.49 m | 1.30 m | 56.5 + 4 drawers of 1.5–4.5 kg |
 | Vault door | Rodin Gen-2.5 High + BANG | Assembler: frame, door, hinge on the left, opens toward the front | 1 hinge, 0–100° | 2.20 m | 1,718 + 2,811 kg (frame anchored) |
 
 ![Filing cabinet close-up: all four drawers out](docs/cabinet_open.png)
@@ -171,7 +171,7 @@ The demo runs on one machine. A live game needs GOLEM as a service: thousands of
 ```
 
 - **A GPU for Tencent's segmentation model.** Hunyuan3D-Part needs far more GPU memory than a laptop's 4 GB card, so on a Tencent Cloud GPU instance it becomes a first-class splitter next to BANG and the cutter, for the assets neither handles.
-- **Throughput by scaling out.** At the measured 4.5 s of GOLEM work per prop, a 1,000-prop catalogue is about 75 minutes in series on one machine. Every prop is independent, so across a pool of CVM workers that time divides by the number of workers.
+- **Throughput by scaling out.** At the measured 4.6 s of GOLEM work per prop, a 1,000-prop catalogue is about 77 minutes in series on one machine. Every prop is independent, so across a pool of CVM workers that time divides by the number of workers.
 - **A quality gate that already exists.** The Unity self-test runs headless today (`-batchmode`, exit code 0 on pass), so every asset can be checked before it ships.
 - **Delivery.** The output is a `.glb` plus a small JSON manifest per prop, ready for object storage and a CDN.
 
@@ -237,7 +237,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 
 - **Part roles are chosen by a person.** Artist-in-the-Loop is the shipped path. The TokenHub vision step and the Tencent segmentation tiers are designed in (choices are discrete on purpose) but not yet wired up, because Tencent Cloud access was still being provisioned during the build.
 - **Generation and BANG follow instructions only partly.** The cabinet came out with four drawer fronts although the prompt and the BANG instruction both said three, and BANG separated only three of them; asked to separate the vault's locking wheel, BANG left it fused to the door, so the wheel doesn't spin. `--carve` recovers fused parts like the fourth drawer front.
-- **Generated meshes are solid.** Drawers are fronts without boxes, cut lids are capped, and masses use per-prop effective densities ([`golem_sizes.json`](golem_sizes.json)) to stand in for hollow real objects.
+- **Generated meshes are solid, and drawers come as fronts only.** GOLEM builds a plain drawer box behind each front (`--drawer-boxes`, coloured from the front's texture) rather than generating real drawer geometry; cut lids are capped; masses use per-prop effective densities ([`golem_sizes.json`](golem_sizes.json)) to stand in for hollow real objects.
 - **The cutter does horizontal lids only.** Everything else goes through BANG and the assembler.
 - **Dragging uses a straight-line mapping.** The grabbed point ends 0–23 px from the cursor, but the big vault door trails it by up to 76 px (in an 846 px view) because its arc is curved.
 - **One importer, one machine.** Unity is the only engine with an importer today, and the production architecture above is a design, not a deployment.

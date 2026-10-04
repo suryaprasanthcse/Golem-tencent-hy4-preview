@@ -1,19 +1,19 @@
 {
-  "measured_at": "2026-10-03T21:17:10+05:30",
+  "measured_at": "2026-10-04T07:28:48+05:30",
   "machine": "Intel64 Family 6 Model 140 Stepping 2, GenuineIntel, Windows 11",
-  "blender_startup_s": 2.04,
+  "blender_startup_s": 2.08,
   "unity": {
     "import_and_articulate_ms": {
-      "chest": 720,
-      "filing_cabinet": 653,
-      "laptop": 548,
-      "toolbox": 538,
+      "chest": 562,
+      "filing_cabinet": 642,
+      "laptop": 544,
+      "toolbox": 532,
       "vault_door": 691
     },
-    "self_test_ms": 33,
+    "self_test_ms": 28,
     "self_test_passed": true,
-    "stage_ms": 198,
-    "total_ms": 3646,
+    "stage_ms": 121,
+    "total_ms": 3348,
     "fresh_import": true
   },
   "props": [
@@ -26,11 +26,11 @@
         111.0
       ],
       "credits": 0.5,
-      "split_s": 3.89,
-      "unity_s": 0.72,
-      "golem_local_s": 4.61,
-      "golem_local_without_blender_startup_s": 2.57,
-      "total_s": 115.6
+      "split_s": 4.32,
+      "unity_s": 0.56,
+      "golem_local_s": 4.88,
+      "golem_local_without_blender_startup_s": 2.8,
+      "total_s": 115.9
     },
     {
       "name": "toolbox",
@@ -41,11 +41,11 @@
         87.0
       ],
       "credits": 0.5,
-      "split_s": 3.84,
-      "unity_s": 0.54,
-      "golem_local_s": 4.38,
-      "golem_local_without_blender_startup_s": 2.34,
-      "total_s": 91.4
+      "split_s": 4.06,
+      "unity_s": 0.53,
+      "golem_local_s": 4.59,
+      "golem_local_without_blender_startup_s": 2.51,
+      "total_s": 91.6
     },
     {
       "name": "laptop",
@@ -56,10 +56,10 @@
         125.0
       ],
       "credits": 0.5,
-      "split_s": 4.21,
-      "unity_s": 0.55,
-      "golem_local_s": 4.76,
-      "golem_local_without_blender_startup_s": 2.72,
+      "split_s": 4.29,
+      "unity_s": 0.54,
+      "golem_local_s": 4.83,
+      "golem_local_without_blender_startup_s": 2.75,
       "total_s": 129.8
     },
     {
@@ -73,11 +73,11 @@
         311.0
       ],
       "credits": 1.0,
-      "split_s": 3.56,
+      "split_s": 3.44,
       "unity_s": 0.69,
-      "golem_local_s": 4.25,
-      "golem_local_without_blender_startup_s": 2.21,
-      "total_s": 532.2
+      "golem_local_s": 4.13,
+      "golem_local_without_blender_startup_s": 2.05,
+      "total_s": 532.1
     },
     {
       "name": "filing_cabinet",
@@ -90,11 +90,11 @@
         283.0
       ],
       "credits": 1.0,
-      "split_s": 3.64,
-      "unity_s": 0.65,
-      "golem_local_s": 4.29,
-      "golem_local_without_blender_startup_s": 2.25,
-      "total_s": 372.3
+      "split_s": 3.97,
+      "unity_s": 0.64,
+      "golem_local_s": 4.61,
+      "golem_local_without_blender_startup_s": 2.53,
+      "total_s": 372.6
     }
   ]
 }

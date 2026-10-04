@@ -30,7 +30,7 @@
                 "--root", "root.7,root.0,root.2,root.3,root.5,root.6",
                 "--slide", "drawer_top=root.4:front", "--slide", "drawer_middle=root.8:front",
                 "--slide", "drawer_lower=root.1:front", "--slide", "drawer_bottom=front_4:front",
-                "--name", "filing_cabinet"]
+                "--drawer-boxes", "--name", "filing_cabinet"]
     }
   ]
 }
