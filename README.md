@@ -181,7 +181,16 @@ The demo runs on one machine. A live game needs GOLEM as a service: thousands of
 
 GOLEM's design principle (the model chooses, the geometry computes) exists so a vision model can drop in. Every Artist-in-the-Loop decision is a pick from a short list: which parts move, hinge or slider, which side, which way. That is the kind of question a vision model on Tencent TokenHub answers from a rendered view of the parts, returning an ID rather than a coordinate, so a wrong answer is visible and cheap to correct. Tencent's part-aware 3D models (HY-3D-Component on TokenHub, and the open Hunyuan3D-Part) add a segmentation tier for the assets BANG leaves fused. With those in place, the artist moves from operator to reviewer: Artist-in-the-Loop stays as the override and the production safety net, and the routine calls are automated.
 
-Tencent Cloud access for hackathon participants was still being provisioned while we built, so these tiers are the next step, not code in this repository.
+The slot already exists. `golem_auto.py` takes the choices as a small JSON file (who chose, the splitter, which parts move and how) and runs the matching splitter. Today the artist writes that file; a vision model's answer goes into the same file, and nothing downstream changes:
+
+```json
+{ "source": "artist", "name": "laptop_r2", "size_m": 0.36, "density": 1300,
+  "splitter": "cut", "lid": { "hinge": "back", "generated_open": true } }
+```
+
+We rehearsed the whole path on a model GOLEM had never seen: a laptop pushed through the Hyper3D Unity bridge's own model loader (`RodinModel.LoadModel`, in a scratch Unity project), split by `golem_auto.py` from that file in 4.6 s, then imported with its hinge and masses (1.42 kg base, 0.33 kg screen) and driven shut and open on the floor. That run found two cutter bugs on this thinner laptop, both fixed: raised keys sliced off with the screen (now returned to the body), and a hinge at the back of the screen's 2 cm edge that swung its front edge through the floor (open parts now turn about their front edge).
+
+Tencent Cloud access for hackathon participants was still being provisioned while we built, so the vision model and the Tencent tiers are the next step, not code in this repository.
 
 ## Hyper3D
 
@@ -216,7 +225,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
   `python hyper3d_client.py generate "wooden treasure chest with a hinged lid, closed" --name chest`
   (and `python hyper3d_client.py bang <name> --instruction "..."` for multi-part models).
 
-**2. Split** (skip this if the asset pack already holds `assets/split/`): run each prop's command from [`golem_props.json`](golem_props.json), for example `python golem_cutter.py assets/raw/chest.glb`. Set `GOLEM_BLENDER` if Blender isn't at its default path.
+**2. Split** (skip this if the asset pack already holds `assets/split/`): run each prop's command from [`golem_props.json`](golem_props.json), for example `python golem_cutter.py assets/raw/chest.glb`. Set `GOLEM_BLENDER` if Blender isn't at its default path. For a new model, write a choices file and run `python golem_auto.py model.glb --choices choices.json --out <folder>`, then in Unity use **GOLEM → Import Folder…** on that folder.
 
 **3. Unity.** Open `GolemUnity/` in Unity 6.6. In the menu bar: **GOLEM → Import Split Props**, then **GOLEM → Build Demo Stage**, then press **Play**. Headless import and self-test, exiting 0 on pass:
 `Unity.exe -batchmode -projectPath GolemUnity -executeMethod Golem.EditorTools.GolemMenu.BuildFromCommandLine`

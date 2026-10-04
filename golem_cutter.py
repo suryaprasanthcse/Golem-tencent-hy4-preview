@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent
 BLENDER = os.environ.get("GOLEM_BLENDER", r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe")
 # Hinge side -> outward direction in Blender's frame (Z up; glTF's front +Z imports as Blender -Y).
 HINGE_SIDES = {"back": (0.0, 1.0), "front": (0.0, -1.0), "right": (1.0, 0.0), "left": (-1.0, 0.0)}
+STRAY_GAP = 0.03  # --open-part: loose pieces farther than this (fraction of the model's size) from the part go back to the body
 
 
 def parse_args(argv):
@@ -239,6 +240,65 @@ def run_in_blender(args) -> None:
     mesh.materials.append(interior)
     interior_index = len(mesh.materials) - 1
 
+    def return_strays(lid_mesh, body_mesh, seam, gap):
+        """Move loose pieces of an open part that sit apart from it back to the body. A cut just above a
+        laptop's deck also slices off whatever pokes above it (raised keys, bumps): those pieces would
+        swing with the screen, and its convex collider, spanning them, hit the floor as it closed.
+        The part is grown from its largest piece by every piece within `gap` of it; the rest goes back.
+        Returns the seam without the strays' cut points (they'd skew where the hinge is centered)."""
+        bm = bmesh.new()
+        bm.from_mesh(lid_mesh)
+        bm.verts.ensure_lookup_table()
+        pieces, seen = [], set()
+        for start in bm.verts:
+            if start.index in seen:
+                continue
+            seen.add(start.index)
+            stack, piece = [start], []
+            while stack:
+                v = stack.pop()
+                piece.append(v.index)
+                for e in v.link_edges:
+                    w = e.other_vert(v)
+                    if w.index not in seen:
+                        seen.add(w.index)
+                        stack.append(w)
+            pieces.append(piece)
+        coords = np.array([v.co[:] for v in bm.verts])
+        boxes = [(coords[p].min(axis=0), coords[p].max(axis=0)) for p in pieces]
+        main = {max(range(len(pieces)), key=lambda i: len(pieces[i]))}
+        grown = True
+        while grown:
+            lo = np.min([boxes[i][0] for i in main], axis=0) - gap
+            hi = np.max([boxes[i][1] for i in main], axis=0) + gap
+            near = {i for i, (a, b) in enumerate(boxes) if np.all(b >= lo) and np.all(a <= hi)}
+            grown = not near <= main
+            main |= near
+        strays = [i for i in range(len(pieces)) if i not in main]
+        if not strays:
+            bm.free()
+            return seam
+        stray_verts = {v for i in strays for v in pieces[i]}
+        moved = bm.copy()
+        moved.verts.ensure_lookup_table()
+        bmesh.ops.delete(moved, geom=[v for v in moved.verts if v.index not in stray_verts], context="VERTS")
+        stray_mesh = lid_mesh.copy()
+        moved.to_mesh(stray_mesh)
+        moved.free()
+        bmesh.ops.delete(bm, geom=[bm.verts[i] for i in stray_verts], context="VERTS")
+        bm.to_mesh(lid_mesh)
+        bm.free()
+        merged = bmesh.new()
+        merged.from_mesh(body_mesh)
+        merged.from_mesh(stray_mesh)  # appends: both halves share the original's material slots
+        merged.to_mesh(body_mesh)
+        merged.free()
+        bpy.data.meshes.remove(stray_mesh)
+        log(f"open part: {len(strays)} loose piece(s), {len(stray_verts)} vertices, sat apart from it and went back to the body")
+        # Keep the cut points around the part itself (horizontally): the strays' outlines are elsewhere.
+        inside = np.all((seam[:, :2] >= lo[:2]) & (seam[:, :2] <= hi[:2]), axis=1)
+        return seam[inside] if inside.sum() >= 3 else seam
+
     def half(keep_above: bool):
         """One side of the plane, with the cut capped flat. Returns (mesh, seam vertices)."""
         bm = bmesh.new()
@@ -265,12 +325,18 @@ def run_in_blender(args) -> None:
     lid_mesh, _, lid_caps = half(keep_above=True)
     if len(seam) < 3 or len(lid_mesh.polygons) == 0 or len(body_mesh.polygons) == 0:
         sys.exit(f"[golem] the cut at {fraction:.3f} missed the mesh (seam points: {len(seam)})")
+    if args.open_part:
+        seam = return_strays(lid_mesh, body_mesh, seam, STRAY_GAP * float(np.ptp(co, axis=0).max()))
 
-    # Hinge on the seam: its extreme on the hinge side, centered along the seam.
+    # Hinge on the seam: its extreme on the hinge side, centered along the seam. An open part (a
+    # laptop screen) instead turns about the other extreme of its cut, its front face: it closes face
+    # down onto the deck, so that edge is the one that stays put. Turning about the back of a 2 cm
+    # screen swung its front edge 2 cm below the hinge, through a thin deck into the floor (and a
+    # closed screen would sink its own thickness into the deck).
     out_dir = np.array([*HINGE_SIDES[args.hinge], 0.0])
     along = np.array([-out_dir[1], out_dir[0], 0.0])
     reach, spread = seam @ out_dir, seam @ along
-    pivot = out_dir * reach.max() + along * (spread.min() + spread.max()) / 2
+    pivot = out_dir * (reach.min() if args.open_part else reach.max()) + along * (spread.min() + spread.max()) / 2
     pivot[2] = cut_z
     axis = np.cross([0.0, 0.0, 1.0], out_dir)  # positive rotation lifts the lid's far side
 

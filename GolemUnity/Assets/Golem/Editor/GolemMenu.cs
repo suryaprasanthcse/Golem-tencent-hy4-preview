@@ -27,12 +27,21 @@ namespace Golem.EditorTools
         [System.Serializable] internal class PropSize { public string name; public float size_m; public float density; public bool anchored; }
         [System.Serializable] class SizeTable { public PropSize[] props; }
 
-        internal static PropSize SizeFor(string name)
+        /// <param name="choicesPath">golem_auto.py's &lt;name&gt;_choices.json: its size_m and density are used
+        /// when golem_sizes.json has no entry for this prop.</param>
+        internal static PropSize SizeFor(string name, string choicesPath = null)
         {
-            if (!File.Exists(SizesPath))
-                return null;
-            var table = JsonUtility.FromJson<SizeTable>(File.ReadAllText(SizesPath));
-            var entry = table.props?.FirstOrDefault(p => p.name == name);
+            var table = File.Exists(SizesPath) ? JsonUtility.FromJson<SizeTable>(File.ReadAllText(SizesPath)) : null;
+            var entry = table?.props?.FirstOrDefault(p => p.name == name);
+            if (entry == null && choicesPath != null && File.Exists(choicesPath))
+            {
+                var chosen = JsonUtility.FromJson<PropSize>(File.ReadAllText(choicesPath));
+                if (chosen.size_m > 0f && chosen.density > 0f)
+                {
+                    Debug.Log($"[GOLEM] {name}: size {chosen.size_m} m and density {chosen.density} kg/m3 from {Path.GetFileName(choicesPath)}");
+                    return chosen;
+                }
+            }
             if (entry == null)
                 Debug.LogWarning($"[GOLEM] {name}: no entry in golem_sizes.json, keeping generated size");
             return entry;
@@ -120,15 +129,56 @@ namespace Golem.EditorTools
             EditorApplication.Exit(passed ? 0 : 1);
         }
 
-        static int ImportAll()
+        [MenuItem("GOLEM/Import Folder...")]
+        public static void ImportFolderMenu()
         {
-            if (!Directory.Exists(SplitRoot))
+            var folder = EditorUtility.OpenFolderPanel("GOLEM: folder of split props (golem_auto.py --out)", SplitRoot, "");
+            if (string.IsNullOrEmpty(folder))
+                return;
+            var report = ImportFolder(folder);
+            Debug.Log($"[GOLEM] {report}");
+            EditorUtility.DisplayDialog("GOLEM", report.Replace("; ", "\n"), "OK");
+        }
+
+        /// <summary>For an agent: import every prop under a split folder other than ../assets/split (for
+        /// example golem_auto.py's output for a newly generated model) into the open scene, without saving.
+        /// Returns each prop's parts with their masses.</summary>
+        public static string ImportFolder(string splitRoot)
+        {
+            var count = ImportAll(splitRoot);
+            var props = Directory.GetDirectories(splitRoot).Select(Path.GetFileName)
+                .Select(name => GameObject.Find(name + Suffix))
+                .Where(prop => prop != null).ToList();
+            // Frame what was imported, three-quarter view with a 30 degree lens: EnsureStage frames
+            // for a whole stage (2 m at least), where a lone laptop is a speck.
+            var renderers = props.SelectMany(p => p.GetComponentsInChildren<Renderer>()).ToArray();
+            if (Camera.main != null && renderers.Length > 0)
             {
-                Debug.LogError($"[GOLEM] no split props folder: {SplitRoot}");
+                var b = renderers[0].bounds;
+                foreach (var r in renderers)
+                    b.Encapsulate(r.bounds);
+                var size = Mathf.Max(b.size.x, b.size.y, b.size.z);
+                Camera.main.fieldOfView = 30f;
+                Camera.main.nearClipPlane = 0.01f;
+                Camera.main.transform.position = b.center + new Vector3(-1.1f, 1.0f, 2.0f) * size;
+                Camera.main.transform.LookAt(b.center);
+            }
+            var lines = props
+                .Select(prop => prop.name + ": " + string.Join(", ", prop.GetComponentsInChildren<ArticulationBody>()
+                    .Select(b => $"{b.name} {b.mass:F2} kg{(b.isRoot ? "" : $" ({b.jointType}, limits {b.xDrive.lowerLimit:F1}..{b.xDrive.upperLimit:F1})")}")));
+            return $"{count} prop(s) from {splitRoot}: " + string.Join("; ", lines);
+        }
+
+        static int ImportAll(string splitRoot = null)
+        {
+            splitRoot ??= SplitRoot;
+            if (!Directory.Exists(splitRoot))
+            {
+                Debug.LogError($"[GOLEM] no split props folder: {splitRoot}");
                 return 0;
             }
             var count = 0;
-            foreach (var dir in Directory.GetDirectories(SplitRoot).OrderBy(d => d))
+            foreach (var dir in Directory.GetDirectories(splitRoot).OrderBy(d => d))
             {
                 var name = Path.GetFileName(dir);
                 var glb = Path.Combine(dir, $"{name}_split.glb");
@@ -179,7 +229,7 @@ namespace Golem.EditorTools
             instance.transform.SetParent(wrapper, false);
 
             // Real-world size: generated meshes arrive ~2 units across; scale uniformly to size_m.
-            var size = SizeFor(name);
+            var size = SizeFor(name, Path.Combine(Path.GetDirectoryName(json), $"{name}_choices.json"));
             var renderers = instance.GetComponentsInChildren<Renderer>();
             if (size != null && renderers.Length > 0)
             {
