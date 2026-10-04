@@ -8,7 +8,7 @@ Text-to-3D can give you a treasure chest in two minutes, but the lid is welded s
 
 ![Five AI-generated props, every moving part open](docs/stage_open.png)
 
-*Five Hyper3D Rodin props in Unity after one key press (O): a laptop, a toolbox, a chest, a four-drawer filing cabinet and a 4.5 t vault door. Before GOLEM, every one of them was a single static mesh ([closed](docs/stage_closed.png)).*
+*Five Hyper3D Rodin props in Unity after one key press (O): a laptop, a toolbox, a chest, a four-drawer filing cabinet and a 4.3 t vault door. Before GOLEM, every one of them was a single static mesh ([closed](docs/stage_closed.png)).*
 
 Built for the Cambridge × Arcade AI Hackathon, Game Tech track (Tencent Cloud × Hyper3D), 3–4 October 2026.
 
@@ -21,7 +21,7 @@ Built for the Cambridge × Arcade AI Hackathon, Game Tech track (Tencent Cloud �
 
 - **Real joints, not animations.** Hinges (revolute) and sliders (prismatic) become Unity `ArticulationBody` joints with limits, driven by motors and simulated by PhysX. Drag any part with the mouse and it follows its own path: lids up, doors around, drawers out.
 - **Geometry does the maths.** Pivots, hinge axes, joint limits, colliders and masses are computed from the mesh. Nobody places a pivot by hand.
-- **Mass from real mesh volume.** Each part weighs its enclosed mesh volume times an effective density for its material, at real-world scale. The chest lid is 15.7 kg; the vault door is 2.8 t. That is why the same 30 kg ball tips the toolbox onto its side and only nudges the cabinet.
+- **Mass from real mesh volume.** Each part weighs its enclosed mesh volume times an effective density for its material, at real-world scale. The chest lid is 15.7 kg; the vault door is 2.7 t. That is why the same 30 kg ball tips the toolbox onto its side and only nudges the cabinet.
 - **Artist-in-the-Loop, built for Tencent vision models.** Today a person makes the creative calls in a few words ("these parts are the door, hinged on the left, opening toward the front") and GOLEM does the rest. Every call is a discrete choice, which is exactly the job a vision model on Tencent TokenHub can take over without changing anything downstream.
 - **Engine-agnostic output.** Each prop is a standard glTF 2.0 `.glb` (one node per part; a hinged part's origin sits on its pivot) plus a JSON joint manifest. The Unity importer ships with this repo; any engine with hinge and slider joints can consume the same pair.
 - **Measured, not claimed.** A headless self-test drives every joint and checks its direction and travel, and a play-mode audit records how far each prop tilts and slides. Every number on this page comes from those tools.
@@ -50,7 +50,7 @@ Measured on a laptop (i5-11320H, 24 GB RAM), from [`METRICS.md`](METRICS.md):
 | Toolbox | Rodin Gen-2.5 | Cutter: seam found automatically at the lid rim | 1 hinge, 0–110° | 0.55 m | 11.9 + 5.0 kg |
 | Chest | Rodin Gen-2.5 | Cutter: seam found automatically in the groove | 1 hinge, 0–110° | 0.90 m | 30.0 + 15.7 kg |
 | Filing cabinet | Rodin Gen-2.5 + BANG (9 parts) | Assembler: artist names body and fronts; the fourth front is carved out of the carcass; drawer boxes are built behind the fronts | 4 sliders, 0–0.49 m | 1.30 m | 56.5 + 4 drawers of 1.5–4.5 kg |
-| Vault door | Rodin Gen-2.5 High + BANG | Assembler: frame, door, hinge on the left, opens toward the front | 1 hinge, 0–100° | 2.20 m | 1,718 + 2,811 kg (frame anchored) |
+| Vault door | Rodin Gen-2.5 High + BANG | Assembler: frame, door, hinge on the left, opens toward the front, hung from an offset hinge arm | 1 hinge, 0–100° | 2.20 m | 1,618 + 2,695 kg (frame anchored) |
 
 ![Filing cabinet close-up: all four drawers out](docs/cabinet_open.png)
 
@@ -91,10 +91,10 @@ This is the vault door, from a single BANG output:
 
 ```bash
 python golem_assemble.py assets/raw/vault_door_bang.glb --root root.5 \
-    --move "door=root.12,root.1,root.2:left:front:100" --name vault_door
+    --move "door=root.12,root.1,root.2:left:front:100" --hinge-arms --name vault_door
 ```
 
-"The frame is `root.5`; the door is these three parts, hinged on the left, opening toward the front, up to 100°." GOLEM puts the pivot on the door's left edge at the front face, aligns the axis, and writes the joint. The boxy props need even less:
+"The frame is `root.5`; the door is these three parts, hinged on the left, opening toward the front, up to 100°." GOLEM aligns the axis and writes the joint. With `--hinge-arms`, as on a real round vault door, the axis sits just outside the frame's front edge rather than on the door: a thick door seated in its frame then backs out through its own opening, and a hinge barrel on the frame and an arm on the door join them through the whole swing. The boxy props need even less:
 
 ```bash
 python golem_cutter.py assets/raw/chest.glb                 # seam, cut and hinge found automatically
@@ -117,7 +117,7 @@ The hand-off between GOLEM and any engine is a `.glb` plus this JSON (the vault 
   ],
   "joints": [{
     "type": "revolute", "parent": "body", "child": "door",
-    "pivot": [-0.738406, -0.055516, 0.262749],
+    "pivot": [-0.949902, -0.055516, 0.309393],
     "axis": [0.0, -1.0, 0.0],
     "limits_deg": [0.0, 100.0], "rest_deg": 0.0,
     "hinge_side": "left", "opens_toward": "front", "outward": [-1.0, 0.0, 0.0]
@@ -139,10 +139,10 @@ Interactive props are only useful if they don't fall over when you use them. The
 | Laptop | 9.6° | 0.11° |
 | Filing cabinet | 2.7° | 0.00° |
 
-- **Parts move at a speed their mass allows.** Opening and closing follow a smooth speed profile whose top speed falls with 1/√mass: a 0.9 kg laptop screen swings shut in 1.2 s, the 2.8 t vault door takes 4.0 s. Before, every part covered 90% of its travel in a quarter of a second whatever it weighed, and the motor's kick threw the props over.
-- **Inertia-scaled drives.** Every joint drive is critically damped at 10 Hz, scaled by that joint's own inertia, so a 0.9 kg screen and a 2.8 t door track their targets equally well.
+- **Parts move at a speed their mass allows.** Opening and closing follow a smooth speed profile whose top speed falls with 1/√mass: a 0.9 kg laptop screen swings shut in 1.2 s, the 2.7 t vault door takes 4.0 s. Before, every part covered 90% of its travel in a quarter of a second whatever it weighed, and the motor's kick threw the props over.
+- **Inertia-scaled drives.** Every joint drive is critically damped at 10 Hz, scaled by that joint's own inertia, so a 0.9 kg screen and a 2.7 t door track their targets equally well.
 - **Flat footprints.** Generated bases are not flat (the chest's varies by 2 cm), so a prop resting on its convex hull rocked from facet to facet as its weight shifted. Each body now stands on a flat footprint at its lowest point.
-- **Fixtures are anchored.** The vault's 2.8 t door outweighs its 1.7 t frame; like a real vault door, it is set in a wall. The stage builds one behind every anchored prop, with a round doorway hidden behind the frame and a dark vault behind that.
+- **Fixtures are anchored.** The vault's 2.7 t door outweighs its 1.6 t frame; like a real vault door, it is set in a wall. The stage builds one behind every anchored prop, with a round doorway hidden behind the frame and a dark vault behind that.
 - **Dragging never reverses.** The mouse-to-joint mapping is fixed when you grab a part. Tested with 37 scripted drags from four camera angles: every one moved the right way, with no reversals.
 
 ![Vault door close-up, swung open](docs/vault_open.png)

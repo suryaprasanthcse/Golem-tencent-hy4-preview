@@ -37,6 +37,17 @@ swings clear of what it closes against), centered along the hinge line.
   handle doesn't tint it. In Unity the box joins the drawer's mesh, so its convex collider and
   its mass (mesh volume x density) cover the whole drawer.
 
+--hinge-arms: for every --move part, set the hinge axis beside the frame instead of on the part,
+  and build the hardware that hangs the part from it, as on a round bank-vault door. Pivoting on
+  the part's own box corner fails for a thick door seated in its frame: the corner is where the
+  front-most point (a central locking hub) meets the side, so it floats in front of the door's
+  rim, and turning about it sweeps the door's back through the frame. The axis goes to the root
+  body's extreme toward HINGE and toward OPENS (its outer front edge), centered on the part along
+  the hinge line, so the door backs out through its own opening before it swings clear. A hinge
+  barrel on that axis joins the body, and an arm (a bar in front of the frame's face and a foot down
+  to the door's face) joins the part. Both are separate objects named golem_hinge_*, so Unity gives
+  them colliders and mass with their body and the stage can tell them from the door.
+
 Writes assets/split/<name>/<name>_split.glb and <name>_joints.json. Runs in headless Blender.
 """
 
@@ -60,6 +71,12 @@ DRAWER_BOTTOM_GAP = 0.06       # gap under the box
 DRAWER_WALL = 0.02             # wall thickness, as a fraction of the box width
 DRAWER_DEPTH_PER_TRAVEL = 1.25  # box depth, as a multiple of the slide travel
 DRAWER_DEPTH_FILL = 0.95       # at most this fraction of the space behind the front
+# Hinge hardware (--hinge-arms), as fractions of the moving part's height along the hinge line unless noted.
+HINGE_BARREL = 0.035           # barrel radius
+HINGE_SPAN = 0.6               # barrel length
+HINGE_ARM = 0.16               # arm height
+HINGE_REACH = 0.25             # how far the arm reaches over the part, as a fraction of its width
+HINGE_SEGMENTS = 24
 
 
 def parse_args(argv):
@@ -74,6 +91,7 @@ def parse_args(argv):
     parser.add_argument("--slide", action="append", default=[], help="NAME=NODES:DIRECTION[:TRAVEL]")
     parser.add_argument("--carve", action="append", default=[], help="NEW=SOURCE:X0,X1,Y0,Y1,Z0,Z1")
     parser.add_argument("--drawer-boxes", action="store_true", help="build a drawer box behind every --slide part")
+    parser.add_argument("--hinge-arms", action="store_true", help="hang every --move part from an axis beside the frame, with a barrel and an arm")
     parser.add_argument("--name", help="output name (default: input file name)")
     parser.add_argument("--out", type=Path, default=ROOT / "assets" / "split")
     args = parser.parse_args(argv)
@@ -330,6 +348,70 @@ def run_in_blender(args) -> None:
         return {"depth": round(depth, 6), "width": round(width, 6), "height": round(height, 6),
                 "wall": round(wall, 6), "volume": round(volume, 6), "colour": [round(float(c), 4) for c in colour]}
 
+    def add_hinge_arm(part, co, lo, hi, pivot, hinge, opens, line, name):
+        """A hinge barrel (on the body) and an arm (on the part) for an axis beside the frame. co/lo/hi:
+        the part's vertices and bounds in the scene frame, as before its origin moved to the pivot.
+        Returns the hardware's dimensions for the joints JSON."""
+        h_ax, o_ax, l_ax = (int(np.argmax(np.abs(v))) for v in (hinge, opens, line))
+        s_h, s_o = np.sign(hinge[h_ax]), np.sign(opens[o_ax])
+        size = hi - lo
+        height, width = size[l_ax], size[h_ax]
+        radius, arm, reach = HINGE_BARREL * height, HINGE_ARM * height, HINGE_REACH * width
+        edge = hi[h_ax] if s_h > 0 else lo[h_ax]  # the part's edge on the hinge side
+        frame_front = pivot[o_ax]  # the axis sits on the frame's front face
+        # The part's face under the arm: its front-most point in the arm's band, near the hinge edge.
+        band = (np.abs(co[:, l_ax] - pivot[l_ax]) < arm / 2) & (s_h * (edge - co[:, h_ax]) < reach)
+        face = s_o * (s_o * co[band, o_ax]).max() if band.any() else frame_front
+
+        colour = front_colour(part)
+        metal = bpy.data.materials.new(f"golem_hinge_{name}")
+        metal.diffuse_color = (*colour, 1.0)
+        if metal.node_tree and (bsdf := metal.node_tree.nodes.get("Principled BSDF")):
+            bsdf.inputs["Base Color"].default_value = (*colour, 1.0)
+            bsdf.inputs["Metallic"].default_value = 0.85
+            bsdf.inputs["Roughness"].default_value = 0.35
+
+        def extent(h0, h1, o0, o1):
+            """A box from extents along the hinge and opening axes, the arm's height along the line."""
+            a, b = np.zeros(3), np.zeros(3)
+            a[h_ax], b[h_ax] = sorted((h0, h1))
+            a[o_ax], b[o_ax] = sorted((o0, o1))
+            a[l_ax], b[l_ax] = pivot[l_ax] - arm / 2, pivot[l_ax] + arm / 2
+            return a, b
+
+        def solid(object_name, boxes, barrel_length=0.0, owner=None):
+            mesh = bpy.data.meshes.new(object_name)
+            obj = bpy.data.objects.new(object_name, mesh)
+            bpy.context.scene.collection.objects.link(obj)
+            bm = bmesh.new()
+            for a, b in boxes:
+                if np.all(b - a > 0):
+                    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.Translation(Vector((a + b) / 2)) @ Matrix.Diagonal((*(b - a), 1.0)))
+            if barrel_length > 0:
+                turn = Vector((0, 0, 1)).rotation_difference(Vector(line)).to_matrix().to_4x4()
+                bmesh.ops.create_cone(bm, cap_ends=True, segments=HINGE_SEGMENTS, radius1=radius, radius2=radius,
+                                      depth=barrel_length, matrix=Matrix.Translation(Vector(pivot)) @ turn)
+            bm.to_mesh(mesh)
+            bm.free()
+            mesh.materials.append(metal)
+            set_origin(obj, pivot)
+            bpy.context.view_layer.update()
+            obj.parent = owner
+            obj.matrix_parent_inverse = owner.matrix_world.inverted()
+            return obj
+
+        # The arm turns with the part: a bar in front of the frame's face from over the part to the
+        # axis, and a foot from the bar down to the part's face (recessed doors sit behind the frame).
+        bar = extent(edge - s_h * reach, pivot[h_ax], frame_front, frame_front + s_o * 2 * radius)
+        foot = extent(edge - s_h * reach, edge - s_h * 0.4 * reach, face - s_o * 0.005 * height, frame_front)
+        boxes = [bar] + ([foot] if s_o * (frame_front - face) > 0 else [])
+        solid(f"golem_hinge_arm_{name}", boxes, owner=part)
+        solid(f"golem_hinge_barrel_{name}", [], barrel_length=HINGE_SPAN * height, owner=body)
+        return {"barrel_radius": round(float(radius), 6), "barrel_length": round(float(HINGE_SPAN * height), 6),
+                "arm_height": round(float(arm), 6), "arm_reach": round(float(reach), 6),
+                "door_face_behind_frame": round(float(s_o * (frame_front - face)), 6),
+                "colour": [round(float(c), 4) for c in colour]}
+
     body = join(args.root.split(","), "body")
     co = vertices(body)
     body_size = co.max(axis=0) - co.min(axis=0)
@@ -373,7 +455,9 @@ def run_in_blender(args) -> None:
         line = np.cross(hinge, opens)  # direction of the hinge line
         lo, hi = co.min(axis=0), co.max(axis=0)
         # Extreme toward the hinge side and toward the opening side; centered along the hinge line.
-        pivot = np.where(hinge > 0, hi, lo) * np.abs(hinge) + np.where(opens > 0, hi, lo) * np.abs(opens) \
+        # With --hinge-arms, the extreme of the fixed body instead: an axis beside the frame (see above).
+        side_lo, side_hi = (body_lo, body_hi) if args.hinge_arms else (lo, hi)
+        pivot = np.where(hinge > 0, side_hi, side_lo) * np.abs(hinge) + np.where(opens > 0, side_hi, side_lo) * np.abs(opens) \
             + (lo + hi) / 2 * np.abs(line)
         axis = np.cross(-hinge, opens)  # positive rotation swings the free edge toward OPENS
         set_origin(part, pivot)
@@ -395,6 +479,9 @@ def run_in_blender(args) -> None:
         })
         log(f"{group['name']}: nodes {group['nodes']}, hinge {group['hinge']}, opens {group['opens']}, "
             f"pivot {joints[-1]['pivot']} axis {joints[-1]['axis']} (glTF)")
+        if args.hinge_arms:
+            joints[-1]["hinge_arm"] = add_hinge_arm(part, co, lo, hi, pivot, hinge, opens, line, group["name"])
+            log(f"{group['name']}: hinge arm {joints[-1]['hinge_arm']}")
 
     used = set(args.root.split(",")) | {n for g in args.groups for n in g["nodes"]}
     unused = sorted(set(meshes) - used)
@@ -404,7 +491,8 @@ def run_in_blender(args) -> None:
     out_dir = (args.out / name).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     glb_path, json_path = out_dir / f"{name}_split.glb", out_dir / f"{name}_joints.json"
-    keep = {body} | {bpy.data.objects[g["name"]] for g in args.groups}
+    keep = {body} | {bpy.data.objects[g["name"]] for g in args.groups} \
+        | {o for o in bpy.context.scene.objects if o.name.startswith("golem_hinge_")}
     for obj in bpy.context.scene.objects:
         obj.select_set(obj in keep)
     bpy.ops.export_scene.gltf(filepath=str(glb_path), export_format="GLB", use_selection=True, export_yup=True)

@@ -217,11 +217,12 @@ namespace Golem.EditorTools
             }
         }
 
-        /// <summary>Renderer bounds of a prop's root body, or of its moving parts.</summary>
+        /// <summary>Renderer bounds of a prop's root body, or of its moving parts, without hinge hardware
+        /// (golem_assemble.py --hinge-arms): an arm reaching sideways would make a round door look oblong.</summary>
         static Bounds PartBounds(Transform prop, bool root)
         {
             var renderers = prop.GetComponentsInChildren<Renderer>()
-                .Where(r => r.GetComponentInParent<ArticulationBody>() is { } body && body.isRoot == root).ToArray();
+                .Where(r => !r.name.StartsWith("golem_hinge") && r.GetComponentInParent<ArticulationBody>() is { } body && body.isRoot == root).ToArray();
             if (renderers.Length == 0)
                 return new Bounds();
             var b = renderers[0].bounds;

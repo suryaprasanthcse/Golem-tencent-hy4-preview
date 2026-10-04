@@ -20,7 +20,7 @@
       "name": "vault_door",
       "hyper3d_jobs": ["vault_door", "vault_door_bang"],
       "split": ["golem_assemble.py", "assets/raw/vault_door_bang.glb", "--root", "root.5",
-                "--move", "door=root.12,root.1,root.2:left:front:100", "--name", "vault_door"]
+                "--move", "door=root.12,root.1,root.2:left:front:100", "--hinge-arms", "--name", "vault_door"]
     },
     {
       "name": "filing_cabinet",
