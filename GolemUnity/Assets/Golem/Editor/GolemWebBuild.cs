@@ -81,8 +81,9 @@ namespace Golem.EditorTools
             PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
             // GitHub Pages sends no Content-Encoding header, so the loader decompresses in JavaScript.
             PlayerSettings.WebGL.decompressionFallback = true;
-            // Hashed names: a redeploy never mixes cached old files with new ones.
-            PlayerSettings.WebGL.nameFilesAsHashes = true;
+            // With hashed file names the 6000.6.0f1 build never settles ("Backend has requested a
+            // buildprogram run 6 times" on PreprocessJS of the loader).
+            PlayerSettings.WebGL.nameFilesAsHashes = false;
             PlayerSettings.WebGL.dataCaching = true;
             PlayerSettings.WebGL.template = "APPLICATION:Default";
             PlayerSettings.defaultWebScreenWidth = 960;
