@@ -1,4 +1,5 @@
-"""golem_choose.py's checks on the model's answer, the part list and the scoring (offline; no API call).
+"""golem_choose.py's checks on the model's answer, the part list with its contacts, and the scoring
+(offline; no API call).
 
 Run from the repo root: python -m unittest -v tests.test_choose
 """
@@ -13,7 +14,9 @@ import trimesh
 
 from golem_choose import agreement, check, part_list
 
-IDS = ["root.1", "root.4", "root.7"]
+# root.4 and root.1 each touch the body root.7, but not each other.
+PARTS = [{"id": "root.1", "touches": ["root.7"]}, {"id": "root.4", "touches": ["root.7"]},
+         {"id": "root.7", "touches": ["root.1", "root.4"]}]
 GOOD = {"splitter": "parts",
         "parts": {"root.7": "body", "root.4": "drawer_top", "root.1": "door"},
         "joints": {"drawer_top": {"type": "slide", "direction": "front"},
@@ -29,17 +32,17 @@ def changed(**fields):
 
 class CheckTest(unittest.TestCase):
     def refused(self, text, reason):
-        choices, problems = check(text, IDS)
+        choices, problems = check(text, PARTS)
         self.assertIsNone(choices)
         self.assertTrue(any(reason in p for p in problems), problems)
 
     def test_good_answer_is_accepted(self):
-        choices, problems = check(json.dumps(GOOD), IDS)
+        choices, problems = check(json.dumps(GOOD), PARTS)
         self.assertEqual(problems, [])
         self.assertEqual(choices["parts"], GOOD["parts"])
 
     def test_json_in_a_code_fence_is_accepted(self):
-        self.assertEqual(check("```json\n" + json.dumps(GOOD) + "\n```", IDS)[1], [])
+        self.assertEqual(check("```json\n" + json.dumps(GOOD) + "\n```", PARTS)[1], [])
 
     def test_prose_is_refused(self):
         self.refused("The top drawer slides out.", "not JSON")
@@ -68,21 +71,37 @@ class CheckTest(unittest.TestCase):
         self.refused(changed(parts={"root.7": "door", "root.4": "drawer_top", "root.1": "door"}), "no part is the body")
         self.refused(changed(mass_kg=12), "unknown keys")
 
+    def test_a_group_whose_parts_do_not_touch_is_refused(self):
+        self.refused(changed(parts={"root.7": "body", "root.4": "drawer_top", "root.1": "drawer_top"},
+                             joints={"drawer_top": GOOD["joints"]["drawer_top"]}, unsure=[], why={}),
+                     "don't touch")
+
+    def test_a_group_that_does_not_touch_the_body_is_refused(self):
+        loose = [{"id": "root.1", "touches": []}, {"id": "root.4", "touches": ["root.7"]},
+                 {"id": "root.7", "touches": ["root.4"]}]
+        choices, problems = check(json.dumps(GOOD), loose)
+        self.assertIsNone(choices)
+        self.assertIn("door: none of its parts touches the body", problems)
+
 
 class PartListTest(unittest.TestCase):
-    def test_boxes_are_shares_of_the_whole_model(self):
+    def test_boxes_are_shares_of_the_whole_model_and_contacts_are_found(self):
         scene = trimesh.Scene()
         scene.add_geometry(trimesh.creation.box(extents=[2, 1, 1]), node_name="body")
-        front = trimesh.creation.box(extents=[1, 0.5, 0.2],
-                                     transform=trimesh.transformations.translation_matrix([0.5, 0, 0.6]))
-        scene.add_geometry(front, node_name="panel")
+        # A panel resting on the body's front face, and a knob floating 10 cm in front of the panel.
+        for name, extents, centre in (("panel", [1, 0.5, 0.2], [0.5, 0, 0.6]), ("knob", [0.1, 0.1, 0.1], [0.5, 0, 0.85])):
+            scene.add_geometry(trimesh.creation.box(extents=extents, transform=trimesh.transformations.translation_matrix(centre)),
+                               node_name=name)
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "two.glb"
+            path = Path(folder) / "three.glb"
             scene.export(path)
-            parts = {p["id"]: p for p in part_list(path, "two")["parts"]}
-        # The model spans x -1..1, y -0.5..0.5, z -0.5..0.7.
-        np.testing.assert_allclose(parts["body"]["size"], [1, 1, 0.83], atol=0.01)
-        np.testing.assert_allclose(parts["panel"]["centre"], [0.75, 0.5, 0.92], atol=0.01)
+            parts = {p["id"]: p for p in part_list(path, "three")["parts"]}
+        # The model spans x -1..1, y -0.5..0.5, z -0.5..0.9.
+        np.testing.assert_allclose(parts["body"]["size"], [1, 1, 0.71], atol=0.01)
+        np.testing.assert_allclose(parts["panel"]["centre"], [0.75, 0.5, 0.79], atol=0.01)
+        self.assertEqual(parts["body"]["touches"], ["panel"])
+        self.assertEqual(parts["panel"]["touches"], ["body"])
+        self.assertEqual(parts["knob"]["touches"], [])
 
 
 class AgreementTest(unittest.TestCase):

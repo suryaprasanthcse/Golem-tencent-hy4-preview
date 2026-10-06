@@ -1,11 +1,12 @@
-"""GOLEM's choice step done by Tencent Hunyuan: build a part list from a multi-part model, ask
-hy4-preview on Tencent TokenHub to label the parts, check the answer, and write a choices file for
-golem_auto.py.
+"""GOLEM's choice step done by Tencent Hunyuan: build a part list from a multi-part model (each
+part's box and the parts its surface touches), ask a Hunyuan model on Tencent TokenHub to label the
+parts, check the answer, and write a choices file for golem_auto.py.
 
 The model only picks words from fixed lists: a role per part, and a joint type and sides per moving
 role. It never sets a number; golem_assemble.py computes every pivot, axis, limit and mass from the
-geometry. An API error, or an answer that fails any check, falls back to the artist's choices file
-(--fallback), or stops when there is none.
+geometry. Code also checks that every moving group holds together and is attached: its parts must
+touch one another and at least one of them must touch the body. An API error, or an answer that
+fails any check, falls back to the artist's choices file (--fallback), or stops when there is none.
 
   python golem_choose.py model.glb --out choices.json [--fallback artist.json] [--compare artist.json]
                          [--model hy4-preview] [--name NAME]
@@ -38,15 +39,22 @@ MAX_OUTPUT_TOKENS = 16000  # caps one call's cost (hy4-preview: about 0.04 USD)
 SIDES = {"left": "x", "right": "x", "bottom": "y", "top": "y", "back": "z", "front": "z"}
 ROLE = re.compile(r"^(body|lid|door|drawer)(_[a-z0-9]+)*$")
 ANSWER_KEYS = {"splitter", "parts", "joints", "unsure", "why"}
+# Two parts touch when at least CONTACT_SHARE of either part's surface samples lie within
+# CONTACT_REACH (a share of the model's diagonal) of the other part; the share threshold ignores grazes.
+CONTACT_REACH = 0.005
+CONTACT_SHARE = 0.01
+CONTACT_SAMPLES = 20000  # surface samples per part, plus its vertices; fixed seed
 
 SYSTEM = """You label the parts of a 3D prop so a physics engine can make it move.
 Choose only from the allowed values. Never output numbers, coordinates, axes, angles or distances:
 code computes all geometry.
 Frame: x runs left to right, y bottom to top, z back to front, as seen standing in front of the prop.
-Each part's centre and size are shares of the whole model (0 to 1).
+Each part's centre and size are shares of the whole model (0 to 1). "touches" lists the parts its
+surface touches.
 - Every part id gets exactly one role. Fixed parts get "body" (one or more parts).
 - Moving roles are lid, door or drawer, with a suffix when there are several (drawer_top,
-  drawer_middle). Parts that move together share one role.
+  drawer_middle). Parts that move together share one role, and must be connected through parts of
+  that role that touch. Every moving role must touch the body.
 - Each moving role gets one joint: {"type":"hinge","hinge":SIDE,"opens":SIDE} or
   {"type":"slide","direction":SIDE}. hinge and opens must be on different axes.
 - SIDE is one of: left, right, back, front, top, bottom.
@@ -56,22 +64,52 @@ Reply with one JSON object only, in this form:
 {"splitter":"parts","parts":{"<id>":"<role>"},"joints":{"<role>":{...}},"unsure":[],"why":{"<role>":"..."}}"""
 
 
+def contacts(meshes: dict, reach: float) -> dict[str, list[str]]:
+    """For each part, the parts its surface touches (see CONTACT_REACH and CONTACT_SHARE)."""
+    import numpy as np
+    import trimesh
+    from scipy.spatial import cKDTree
+
+    points = {n: np.vstack([m.vertices, trimesh.sample.sample_surface(m, CONTACT_SAMPLES, seed=0)[0]])
+              for n, m in meshes.items()}
+    trees = {n: cKDTree(p) for n, p in points.items()}
+    touches = {n: [] for n in meshes}
+    names = sorted(meshes)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            (a_lo, a_hi), (b_lo, b_hi) = meshes[a].bounds, meshes[b].bounds
+            if np.any(a_lo > b_hi + reach) or np.any(b_lo > a_hi + reach):
+                continue  # the boxes are too far apart for the surfaces to touch
+            shares = [np.mean(trees[y].query(points[x], distance_upper_bound=reach)[0] <= reach)
+                      for x, y in ((a, b), (b, a))]
+            if max(shares) >= CONTACT_SHARE:
+                touches[a].append(b)
+                touches[b].append(a)
+    return touches
+
+
 def part_list(model: Path, name: str) -> dict:
-    """Each mesh node's box as shares of the whole model, in the glTF frame (+Y up, front +Z)."""
+    """Each mesh node's box as shares of the whole model, in the glTF frame (+Y up, front +Z), and
+    the parts it touches."""
+    import numpy as np
     import trimesh  # only this step needs it
 
     scene = trimesh.load(model, force="scene")
     lo, hi = scene.bounds
     size = hi - lo
-    parts = []
+    meshes = {}
     for node in sorted(scene.graph.nodes_geometry):
         transform, geometry = scene.graph[node]
-        mesh = scene.geometry[geometry].copy()
-        mesh.apply_transform(transform)
+        meshes[node] = scene.geometry[geometry].copy()
+        meshes[node].apply_transform(transform)
+    touches = contacts(meshes, CONTACT_REACH * float(np.linalg.norm(size)))
+    parts = []
+    for node, mesh in meshes.items():
         part_lo, part_hi = mesh.bounds
         parts.append({"id": node,
                       "centre": [round(float(v), 2) for v in ((part_lo + part_hi) / 2 - lo) / size],
-                      "size": [round(float(v), 2) for v in (part_hi - part_lo) / size]})
+                      "size": [round(float(v), 2) for v in (part_hi - part_lo) / size],
+                      "touches": touches[node]})
     return {"prop": name, "model_size": {k: round(float(v), 2) for k, v in zip("xyz", size)}, "parts": parts}
 
 
@@ -93,8 +131,32 @@ def joint_problems(role: str, joint) -> list[str]:
     return []
 
 
-def check(text: str, part_ids: list[str]) -> tuple[dict | None, list[str]]:
+def group_problems(parts: dict, touches: dict) -> list[str]:
+    """Each moving role's parts must be connected through touching parts of that role, and touch the body."""
+    groups = {}
+    for node, role in parts.items():
+        groups.setdefault(role, set()).add(node)
+    problems = []
+    for role, members in sorted(groups.items()):
+        if role == "body":
+            continue
+        reached, frontier = set(), [min(members)]
+        while frontier:
+            node = frontier.pop()
+            if node not in reached:
+                reached.add(node)
+                frontier += [n for n in touches.get(node, []) if n in members]
+        if reached != members:
+            problems.append(f"{role}: {sorted(members - reached)} don't touch {sorted(reached)}")
+        if not any(parts.get(n) == "body" for m in members for n in touches.get(m, [])):
+            problems.append(f"{role}: none of its parts touches the body")
+    return problems
+
+
+def check(text: str, part_list_parts: list[dict]) -> tuple[dict | None, list[str]]:
     """The model's answer as choices, or None and every reason it was refused."""
+    part_ids = [p["id"] for p in part_list_parts]
+    touches = {p["id"]: p.get("touches", []) for p in part_list_parts}
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text.strip(), re.S)
     try:
         answer = json.loads(fenced.group(1) if fenced else text)
@@ -134,6 +196,8 @@ def check(text: str, part_ids: list[str]) -> tuple[dict | None, list[str]]:
         problems.append('"unsure" must list moving roles')
     if not isinstance(why, dict) or not all(isinstance(v, str) for v in why.values()):
         problems.append('"why" must map roles to text')
+    if not problems:
+        problems += group_problems(parts, touches)
     if problems:
         return None, problems
     return {"splitter": "parts", "parts": parts, "joints": joints, "unsure": unsure,
@@ -222,18 +286,18 @@ def main() -> int:
     parser.add_argument("--model", dest="model_id", default="hy4-preview", help="TokenHub model id (default hy4-preview)")
     parser.add_argument("--name", help="prop name (default: the model file's name)")
     args = parser.parse_args()
+    sys.stdout.reconfigure(errors="backslashreplace")  # TokenHub errors carry Chinese text; Windows consoles may not
     if not args.glb.exists():
         sys.exit(f"[golem] no such model: {args.glb}")
     name = args.name or args.glb.stem
     manifest = part_list(args.glb, name)
-    ids = [p["id"] for p in manifest["parts"]]
-    print(f"[golem] {name}: {len(ids)} parts; asking {args.model_id} on {BASE}", flush=True)
+    print(f"[golem] {name}: {len(manifest['parts'])} parts; asking {args.model_id} on {BASE}", flush=True)
 
     result = ask(args.model_id, manifest)
     content, fields, problems = answer_from(result)
     choices = None
     if content is not None:
-        choices, problems = check(content, ids)
+        choices, problems = check(content, manifest["parts"])
 
     if choices is not None:
         out, outcome = {"source": args.model_id, "name": name, **choices}, "accepted"
