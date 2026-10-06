@@ -39,3 +39,10 @@ assets/unity_timing.json
 
 # Release archive of the generated models (published as a release asset, not committed)
 assets_release.zip
+
+# run_demo.py: frames, split models and logs are regenerated per run; proof.json, the choices and the MP4 are kept
+tencent/demo/*/split/
+tencent/demo/*/frames/
+tencent/demo/*/unity.log
+tencent/demo/stage2_check/
+tencent/demo/unity_first_import.log

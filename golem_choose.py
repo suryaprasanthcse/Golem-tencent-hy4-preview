@@ -215,15 +215,19 @@ def ask(model_id: str, manifest: dict) -> dict:
                          {"role": "user", "content": json.dumps(manifest)}]}
     request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers={
         "Authorization": f"Bearer {get_secret('TENCENT_MAAS_API_KEY')}", "Content-Type": "application/json"})
+    sent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     started = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
-            status, text = response.status, response.read().decode("utf-8")
+            status, text, headers = response.status, response.read().decode("utf-8"), response.headers
     except urllib.error.HTTPError as error:
-        status, text = error.code, error.read().decode("utf-8", "replace")
+        status, text, headers = error.code, error.read().decode("utf-8", "replace"), error.headers
     except (urllib.error.URLError, TimeoutError) as error:
         return {"error": f"request failed: {error}", "latency_ms": round((time.perf_counter() - started) * 1000)}
-    return {"status": status, "latency_ms": round((time.perf_counter() - started) * 1000), "text": text}
+    # Tencent's ids for this call (they can look them up in their own logs); cookies are left out.
+    traced = {k: v for k, v in headers.items() if re.search(r"request|trace|id$", k, re.I) and "cookie" not in k.lower()}
+    return {"status": status, "latency_ms": round((time.perf_counter() - started) * 1000), "text": text,
+            "sent_utc": sent, "response_headers": traced}
 
 
 def answer_from(result: dict) -> tuple[str | None, dict, list[str]]:
@@ -238,7 +242,8 @@ def answer_from(result: dict) -> tuple[str | None, dict, list[str]]:
         content = choice["message"].get("content") or ""
     except (json.JSONDecodeError, KeyError, IndexError, TypeError):
         return None, {}, ["the response is not a chat completion"]
-    fields = {"usage": data.get("usage", {}), "finish_reason": choice.get("finish_reason"),
+    fields = {"completion_id": data.get("id"), "created": data.get("created"), "served_model": data.get("model"),
+              "usage": data.get("usage", {}), "finish_reason": choice.get("finish_reason"),
               "reasoning": choice["message"].get("reasoning_content"), "content": content}
     if choice.get("finish_reason") == "length":
         return None, fields, [f"the reply was cut off at {MAX_OUTPUT_TOKENS} output tokens"]
@@ -311,6 +316,7 @@ def main() -> int:
     record_path = args.out.with_name(args.out.stem + ".run.json")
     record = {"model": args.model_id, "glb": str(args.glb), "endpoint": f"{BASE}/v1/chat/completions", "outcome": outcome,
               "problems": problems, "latency_ms": result.get("latency_ms"), "status": result.get("status"),
+              "sent_utc": result.get("sent_utc"), "response_headers": result.get("response_headers"),
               **fields, "system": SYSTEM, "part_list": manifest}
     if "content" not in fields and "text" in result:
         record["response"] = result["text"][:2000]
@@ -319,6 +325,9 @@ def main() -> int:
     usage = fields.get("usage") or {}
     tokens_in, tokens_out = usage.get("prompt_tokens"), usage.get("completion_tokens")
     print(f"[golem] TokenHub latency: {result.get('latency_ms')} ms (HTTP {result.get('status', '-')})")
+    if fields.get("completion_id"):
+        print(f"[golem] TokenHub completion id: {fields['completion_id']} (model served: {fields.get('served_model')},"
+              f" sent {result.get('sent_utc')})")
     if tokens_in is not None and tokens_out is not None:
         price = PRICES.get(args.model_id)
         cost = f", about {(tokens_in * price[0] + tokens_out * price[1]) / 1e6:.4f} USD at list price" if price else ""
